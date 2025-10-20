@@ -88,7 +88,7 @@ This is **partition pruning**, and it happens inside the **storage layer**.
 
 ---
 
-### 1.4 Compute Layer: Virtual Warehouses & Parallelism
+### 1.4 Compute Layer: Virtual Warehouses, Parallelism & Optimizer
 
 #### Fundamentals
 - A **virtual warehouse** = compute cluster that runs queries.
@@ -122,21 +122,79 @@ GROUP BY region;
 
 ### 1.5 Cloud Services Layer: The “Brain”
 
-#### Responsibilities
-- **Parse & optimize** SQL queries.  
-- **Decide** which micro-partitions to read (_pruning_).  
-- **Assign** work to compute nodes.  
-- **Check** permissions via RBAC.  
-- **Manage** caches and query metadata.
+The **Cloud Services Layer** is Snowflake’s *central nervous system*.  
+It coordinates all query operations and ensures that storage, compute, and user permissions work together smoothly.  
+No data is stored here — it’s all **metadata, orchestration, and optimization**.
 
-#### Example
+---
+
+#### 🧠 The Optimizer — The Query "Planner"
+
+When you submit a SQL query, the **Optimizer** (inside this layer) becomes the planner and strategist.
+
+**Its goal:**  
+👉 Transform your SQL statement into the *most efficient execution plan possible.*
+
+**Key Responsibilities:**
+1. **Parse and rewrite SQL** — validate syntax, resolve references, and simplify logic.  
+2. **Build an execution plan** — decide how to access tables, join them, and aggregate results.  
+3. **Leverage metadata cache** — determine which micro-partitions to read and which to skip (*partition pruning*).  
+4. **Select execution strategies** — e.g., hash join vs. broadcast join, aggregation order, etc.  
+5. **Distribute work** — assign tasks to compute nodes for parallel execution.  
+
+**Analogy:**  
+> Think of the Optimizer as a head chef planning the entire recipe before anyone starts cooking.  
+> The compute layer are the sous-chefs who just execute the plan efficiently.
+
+---
+
+#### ⚙️ Example: The Optimizer in Action
+
+```sql
+SELECT c.country, SUM(o.amount)
+FROM customers c
+JOIN orders o ON c.id = o.customer_id
+WHERE o.order_date >= '2024-01-01'
+GROUP BY c.country;
+```
+Here’s what happens before any data is read:
+
+1. **Parsing:** The optimizer validates the SQL syntax.  
+2. **Planning:** It inspects metadata - finds that only 20% of micro-partitions have `order_date >= '2024-01-01'`.  
+3. **Optimization:** It selects a **hash join** (both tables large) and determines partition pruning rules.  
+4. **Distribution:** It assigns subsets of data to each compute node to process in parallel.  
+5. **Execution:** The compute layer receives this plan and executes it exactly as instructed.
+
+---
+
+#### Other Components of the Cloud Services Layer
+
+Beyond the optimizer, this layer also manages:
+
+| Function | Description |
+|-----------|--------------|
+| **Metadata management** | Keeps catalog of all databases, schemas, tables, and micro-partitions. |
+| **Security & RBAC** | Verifies that the active role has privileges for each object accessed. |
+| **Caching coordination** | Controls result cache and metadata cache usage. |
+| **Session management** | Tracks active users, queries, and warehouses. |
+| **Query compilation** | Translates SQL plans into execution instructions for compute clusters. |
+
+---
+
+#### Example - Full Cloud Services Flow
+
 ```sql
 SELECT * FROM orders WHERE region = 'Europe';
 ```
-1. Cloud Services parses query & checks role privileges.  
-2. Reads metadata → only partitions containing `'Europe'`.  
-3. Tells compute layer which partitions to read.  
-4. Combines results and sends them back.
+
+1. **Authentication & RBAC:** Check if the user’s role can read `orders`.  
+2. **Optimization:** Read partition metadata → find which contain `'Europe'`.  
+3. **Planning:** Build the execution plan and send it to the compute layer.  
+4. **Execution:** Compute layer reads only the relevant partitions in parallel.  
+5. **Aggregation & Return:** Results are combined and returned to the user.
+
+> The Cloud Services Layer doesn’t store data  it stores *knowledge about data*.  
+> It’s what makes Snowflake **smart, elastic, and self-optimizing.**
 
 ---
 
@@ -152,13 +210,13 @@ Caching = reusing previous data or results to save time and cost.
 
 ---
 
-## Deep Dive - “Same SQL” and “Same Data”
+#### Deep Dive - “Same SQL” and “Same Data”
 
 Snowflake has multiple caches that operate at different levels. As seen above, they are the _Result Cache_, _Local Cache_, and _Metadata Cache_.
 
 Each one “remembers” something different. Let’s break them down:
 
-### Result Cache (Same SQL, Same Data)
+#### Result Cache (Same SQL, Same Data)
 
 **What it stores**
 - The final output (rows/aggregates) of a query.  
@@ -181,7 +239,7 @@ If new rows are inserted, the cache is invalidated because the data snapshot cha
 
 ---
 
-### Local Cache (Same Data Accessed Again by the Same Warehouse)
+#### Local Cache (Same Data Accessed Again by the Same Warehouse)
 
 **What it stores**
 - The *raw micro-partitions* (data chunks) recently read from the storage layer.  
@@ -201,11 +259,11 @@ But the same data (`Europe` partitions) is already in memory → reused from **l
 
 ---
 
-### Metadata Cache (Used by the Optimizer)
+#### Metadata Cache (Used by the Optimizer)
 
 The **Metadata Cache** is always active and operates behind the scenes in the **Cloud Services Layer**.
 
-#### What It Stores
+**What It Stores**
 - Summary information (metadata) about each **micro-partition**:
   - Minimum and maximum values per column, Row counts and null counts, File and partition locations, Data versioning information.
 
@@ -213,7 +271,7 @@ This metadata is lightweight but extremely valuable.
 
 -> It allows the **optimizer** to know where data is located **without reading it first**.
 
-#### Why It Matters
+**Why It Matters**
 Before any query runs, the optimizer:
 1. Reads the metadata cache.  
 2. Determines which micro-partitions are **relevant** for your filters.  
@@ -240,8 +298,6 @@ No actual data is read until the optimizer knows exactly which partitions matter
 
 Snowflake’s security model is built on **Role-Based Access Control (RBAC)** —  
 every user acts *through a role*, and that role defines *what they can see or do*.
-
----
 
 #### Core Principles
 
@@ -321,8 +377,7 @@ Snowflake includes built-in roles:
 | **SYSADMIN** | Manages databases, schemas, and objects. |
 | **PUBLIC** | Default role with minimal privileges. |
 
-**Best practice:**  
-Use _least privilege_ - give users the minimum necessary role to do their job.
+**Best practice:** Use _least privilege_ - give users the minimum necessary role to do their job.
 
 ---
 
@@ -346,36 +401,192 @@ Use _least privilege_ - give users the minimum necessary role to do their job.
 | **Table** | `GRANT SELECT ON TABLE sales.public.orders TO ROLE analyst;` | Allows querying a table. |
 | **Role assignment** | `GRANT ROLE analyst TO USER caio;` | Gives user access through a role. |
 
-🧭 **Roles → Privileges → Objects → Users**  
-This chain defines *everything* about access in Snowflake.
+**Roles → Privileges → Objects → Users**: This chain defines *everything* about access in Snowflake.
 
 ---
 
 ### 1.8 Performance Optimization Techniques
 
-| Area | Technique | Why it helps |
-|-------|------------|--------------|
-| **Query pruning** | Use filters on columns Snowflake can prune. | Reads fewer partitions. |
-| **Clustering keys** | Group data manually by frequent filters. | Improves pruning for large tables. |
-| **Warehouse sizing** | Scale wisely, use auto-suspend. | Reduces cost. |
-| **Materialized views** | Pre-compute common aggregations. | Faster dashboards. |
-| **Query profiling** | Use `QUERY_HISTORY()` or UI profiler. | Identify slow steps. |
+Performance tuning in Snowflake means helping the **Optimizer** and the **Compute Layer** do *less work*.  
+That means:  
+- Reading less data  
+- Caching more effectively  
+- Using compute power efficiently  
 
-#### Example
+---
+
+#### Clustering (Organizing Data for Pruning)
+
+**Definition:**  
+Clustering organizes rows inside micro-partitions so that values of one or more columns are physically close together.  
+
+**Why it matters:**  
+It improves **partition pruning** - Snowflake can skip entire chunks of data because related values are stored together.
+
+**Example:**  
+```sql
+ALTER TABLE orders CLUSTER BY (country, order_date);
+```
+
+Now all rows with the same `country` and `order_date` ranges are near each other — pruning becomes sharper.
+
+You can inspect clustering quality with:  
+```sql
+SELECT SYSTEM$CLUSTERING_INFORMATION('orders');
+```
+
+**Analogy:**  
+> Imagine sorting a library so that all “Europe” books are on one shelf - the librarian finds them faster!
+
+---
+
+#### Views vs. Materialized Views
+
+| Type | Stores Data? | Updated Automatically? | When to Use |
+|------|----------------|----------------------|--------------|
+| **View** | ❌ No | N/A | For lightweight, dynamic queries. |
+| **Materialized View** | ✅ Yes | ✅ Yes | For heavy or repeated aggregations. |
+
+**Example:**
+```sql
+CREATE VIEW v_orders_summary AS
+SELECT region, SUM(amount) AS total FROM orders GROUP BY region;
+
+CREATE MATERIALIZED VIEW mv_orders_summary AS
+SELECT region, SUM(amount) AS total FROM orders GROUP BY region;
+```
+
+The second one **runs instantly** since results are precomputed.
+
+---
+
+#### Profiling (Measuring Query Performance)
+
+**Definition:**  
+Profiling means examining how a query actually ran - which steps were slow, how many partitions were read, and how compute was distributed.
+
+**How to Access:**  
+- Snowflake UI → **Query History → Profile**  
+- SQL via `SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY`
+
+| Component | Description | Example insight |
+|------------|--------------|-----------------|
+| **Query Plan Graph** | Visual DAG showing each step (scan, join, aggregate). | Detect unbalanced joins or bottlenecks. |
+| **Bytes scanned** | Total data read. | Too high = poor pruning or missing clustering. |
+| **Partitions scanned** | How many micro-partitions were accessed. | Should be much smaller than total. |
+| **Elapsed time per step** | Execution time per operation. | Helps find slow joins or aggregations. |
+
+**Example Insight:**  
+If profiling shows most time spent on “join,” try clustering or filtering earlier.
+
+---
+
+#### Core Optimization Areas
+
+| Area | Technique | Why it helps | Example or Tip |
+|-------|------------|--------------|----------------|
+| **1. Query pruning** | Use filters on columns Snowflake can prune. | Reduces number of micro-partitions scanned. | Filter on `order_date` instead of `DATE(order_date)`. |
+| **2. Clustering keys** | Group large tables by frequently filtered columns. | Keeps data ordered for faster pruning. | `ALTER TABLE orders CLUSTER BY (country, order_date);` |
+| **3. Warehouse sizing** | Choose the right size and enable auto-suspend. | Balances cost and speed. | Short bursts → medium; long queries → large. |
+| **4. Materialized views** | Store pre-aggregated results. | Avoids recomputation for dashboards. | `CREATE MATERIALIZED VIEW mv_sales AS SELECT region, SUM(amount)...` |
+| **5. Caching** | Reuse result/local/metadata caches. | Saves compute and I/O. | Run related queries in the same warehouse. |
+| **6. Query profiling** | Inspect execution plans. | Identify bottlenecks. | Use the Web UI or `QUERY_HISTORY()`. |
+
+---
+
+#### Example - Optimizing a Query
+
 ```sql
 SELECT customer_id, SUM(amount)
 FROM orders
 WHERE country = 'DE'
 GROUP BY customer_id;
 ```
-Possible optimizations:
-- Cluster by `(country)` for better pruning.  
-- Materialize frequent aggregates.  
-- Scale out if concurrency is high.
+
+**Possible improvements:**
+
+1. **Clustering**  
+   - Cluster by `(country)` or `(country, order_date)` for better pruning.  
+
+2. **Avoid Functions on Filter Columns**  
+   - Don’t wrap filters in functions like `LOWER(country) = 'de'`; this prevents pruning.  
+
+3. **Scale Appropriately**  
+   - Scale **up** for faster single queries or **out** for concurrency.  
+
+4. **Materialized View**  
+   - Precompute if it’s a common aggregation:  
+     ```sql
+     CREATE MATERIALIZED VIEW mv_orders_de AS
+     SELECT customer_id, SUM(amount)
+     FROM orders
+     WHERE country = 'DE'
+     GROUP BY customer_id;
+     ```
+
+5. **Inspect the Query Profile**  
+   - Check *Query History → Profile* for large scans or skewed joins.
 
 ---
 
-### 🧭 1.9 Visual Summary
+#### Visualization - How Query Pruning Works
+
+```
+orders table
+├── Partition 1 → country=US  (skipped)
+├── Partition 2 → country=ES  (skipped)
+├── Partition 3 → country=DE  ✅ scanned
+├── Partition 4 → country=DE  ✅ scanned
+└── Partition 5 → country=FR  (skipped)
+```
+
+Out of 5 partitions, only 2 are read — 60% of the work is saved.
+
+---
+
+#### Fundamental Rule of Thumb
+
+> **Snowflake doesn’t get slow - it just scans more data than necessary.**  
+> Optimization means guiding the optimizer to touch as few micro-partitions as possible.
+
+---
+
+#### Bonus: Useful Views & Functions
+
+| View / Function | Description | Example |
+|------------------|--------------|----------|
+| `SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY` | Query metadata for performance review. | Find queries with long execution time. |
+| `TABLE_STORAGE_METRICS` | See table size and micro-partition stats. | Identify bloated tables for reclustering. |
+| `SYSTEM$CLUSTERING_INFORMATION('table_name')` | Shows clustering depth and effectiveness. | Monitor large tables for re-clustering needs. |
+
+---
+
+#### Optimization Checklist
+
+- [ ] My filters enable **partition pruning** (no unnecessary functions).  
+- [ ] I use **clustering keys** for very large, frequently filtered tables.  
+- [ ] My **warehouses auto-suspend** when idle to save cost.  
+- [ ] I **reuse warehouses** to take advantage of caching.  
+- [ ] I **profile queries** regularly to identify slow joins or large scans.  
+- [ ] I use **materialized views** for repeated aggregations.  
+
+---
+
+#### Summary - What Optimization Really Means
+
+> Snowflake optimization isn’t about “tuning knobs.”  
+> It’s about *helping the optimizer do less work*.  
+>  
+> - Store data intelligently (partitioning, clustering).  
+> - Write filter-friendly SQL.  
+> - Use warehouses efficiently.  
+> - Let caching and materialization handle repetition.  
+>  
+> In short: **read less, compute smarter, and pay only for what you need.**
+
+---
+
+### 1.9 Visual Summary - The Snowflake Engine
 
 ```
                         ┌───────────────────────────────┐
@@ -404,15 +615,14 @@ Possible optimizations:
 
 ---
 
-### ✅ 1.10 Quick Recap Checklist
+### 1.10 Quick Recap Checklist
 
-- [ ] I can explain why Snowflake was created.  
-- [ ] I understand the difference between S3 partitions and Snowflake micro-partitions.  
-- [ ] I know what “parallel processing” means.  
-- [ ] I can describe the three layers and what happens in each.  
-- [ ] I know what caching is and how each cache type works.  
-- [ ] I can mention at least three performance optimization techniques.
+- [ ] I can explain **why Snowflake was created** and its three-layer design.  
+- [ ] I understand **the difference between S3 partitions and micro-partitions.**  
+- [ ] I can describe **the Optimizer’s role** in planning queries.  
+- [ ] I know what **parallel processing** and **clustering** mean.  
+- [ ] I can explain **caching types** and how each one works.  
+- [ ] I can apply at least **three optimization techniques** (pruning, caching, views).  
+- [ ] I know how to **profile a query** to find performance bottlenecks.  
 
 ---
-
-Next step → **Procedural SQL: Stored Procedures, Streams, and Tasks** 🚀
