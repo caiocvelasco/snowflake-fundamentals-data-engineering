@@ -825,3 +825,158 @@ $$;
 - You can dynamically build SQL text and execute it.  
 - Perfect for looping over tables, handling errors, or running conditionally.
 
+---
+
+### 2.2 MERGE Statements — Performing Efficient Upserts
+
+#### Why MERGE Exists
+
+In data pipelines, you often need to **synchronize a target table** (e.g. `fact_sales`)  
+with new or changed records from a source table (e.g. `staging_sales`).  
+
+Before MERGE, this required two separate steps:
+1. `UPDATE` existing rows (if they already exist in the target).
+2. `INSERT` new rows (if they don’t exist yet).
+
+MERGE combines both into **one atomic statement** - faster, safer, and cleaner.
+
+---
+
+#### MERGE Syntax
+
+```sql
+MERGE INTO <target_table> AS t
+USING <source_table> AS s
+ON <join_condition>
+WHEN MATCHED THEN UPDATE SET ...
+WHEN NOT MATCHED THEN INSERT (...columns...) VALUES (...values...);
+```
+
+**Breakdown:**
+- `MERGE INTO`: defines the target table to be updated.  
+- `USING`: defines the source table (the incoming data).  
+- `ON`: defines how to match rows between the two tables.  
+- `WHEN MATCHED`: what to do when the key already exists (usually an `UPDATE`).  
+- `WHEN NOT MATCHED`: what to do when the key doesn’t exist (usually an `INSERT`).  
+
+---
+
+#### Example 1 - Basic MERGE for Daily Sales Loads
+
+**Business Goal:**  
+This MERGE keeps the `fact_sales` table synchronized with the latest daily data from `staging_sales`.  
+Each day, new transactions arrive in the staging area. The MERGE ensures:
+- existing sales are **updated** if their amounts change (e.g., refunds, adjustments), and  
+- new orders are **inserted** seamlessly.  
+
+This pattern is a classic **daily incremental load** used in finance, retail, and e-commerce ETL pipelines.
+
+```sql
+MERGE INTO fact_sales AS t
+USING staging_sales AS s
+ON t.order_id = s.order_id
+WHEN MATCHED THEN
+    UPDATE SET
+        t.amount     = s.amount,
+        t.updated_at = CURRENT_TIMESTAMP()
+WHEN NOT MATCHED THEN
+    INSERT (order_id, amount, sales_date, created_at, updated_at)
+    VALUES (s.order_id, s.amount, s.sales_date, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP());
+```
+
+**What happens here:**
+1. For each row in `staging_sales`, Snowflake checks if the same `order_id` exists in `fact_sales`.  
+2. If found → update the amount and timestamp.  
+3. If not found → insert it as a new row.  
+4. The entire process is **atomic** — either all updates succeed or none do.  
+
+---
+
+#### Example 2 - MERGE with a Filtered Source
+
+**Business Goal:**  
+This MERGE is used in a **scheduled job** that only processes the current day’s data, avoiding unnecessary work.  
+By filtering the source inside the MERGE, it ensures only *today’s* rows are evaluated atomically - perfect for near-real-time ingestion pipelines where you only want to update the active partition.  
+
+Common use cases include **daily sales snapshots**, **rolling inventory updates**,  
+or **transaction feeds** coming from an external system like Stripe or Shopify.
+
+```sql
+MERGE INTO fact_sales AS t
+USING (
+  SELECT * FROM staging_sales WHERE sales_date = CURRENT_DATE()
+) AS s
+ON t.order_id = s.order_id
+WHEN MATCHED THEN UPDATE SET amount = s.amount
+WHEN NOT MATCHED THEN INSERT (order_id, amount, sales_date)
+VALUES (s.order_id, s.amount, s.sales_date);
+```
+
+**Why this is important:**  
+Filtering inside the `USING` clause (instead of before running the MERGE)  
+ensures the source dataset is evaluated once and atomically with the operation.
+
+---
+
+#### Analogy
+
+> Think of MERGE as a **smart librarian** updating a catalog:  
+> - If a book already exists → update its details.  
+> - If it’s a new book → add it to the shelf.  
+> - All changes are made in one organized step, not two separate passes.
+
+---
+
+#### Common MERGE Patterns
+
+| Scenario | Typical Columns | Purpose |
+|-----------|------------------|----------|
+| **Fact table upsert** | `order_id`, `date` | Load new daily transactions and update existing ones. |
+| **Dimension table refresh** | `customer_id` | Sync changing attributes like names or status. |
+| **CDC integration** | `record_id`, `operation` | Apply inserts/updates/deletes from a change log stream. |
+
+---
+
+#### Best Practices
+
+| Practice | Why it matters |
+|-----------|----------------|
+| **Cluster or partition target table** | Improves merge speed and pruning on join keys. |
+| **Filter the source** | Avoid merging irrelevant rows. |
+| **Avoid updating many columns** | Increases micro-partition rewrites. |
+| **Track affected rows** | Use `RESULT_SCAN(LAST_QUERY_ID())` to review merge results. |
+| **Combine with Streams** | Enables continuous incremental merges (covered next). |
+
+---
+
+#### Inspecting Merge Results
+
+After a MERGE runs, you can query how many rows were updated or inserted using Snowflake’s metadata functions:
+
+```sql
+SELECT * FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()));
+```
+
+This returns counts like:
+
+```
+rows_inserted | rows_updated | rows_deleted
+--------------+--------------+--------------
+1024 | 354 | 0
+```
+
+
+---
+
+#### Quick Recap
+
+- [ ] MERGE combines `INSERT` and `UPDATE` in one atomic statement.  
+- [ ] The `ON` clause defines how rows in target and source match.  
+- [ ] Each branch (`WHEN MATCHED` / `WHEN NOT MATCHED`) defines what happens.  
+- [ ] Useful for **upserts**, **slowly changing dimensions**, and **CDC**.  
+- [ ] Often used inside stored procedures or tasks.  
+
+---
+
+
+
