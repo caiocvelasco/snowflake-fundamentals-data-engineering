@@ -626,3 +626,202 @@ Out of 5 partitions, only 2 are read — 60% of the work is saved.
 - [ ] I know how to **profile a query** to find performance bottlenecks.  
 
 ---
+
+## 2. Procedural SQL, Streams & Tasks
+
+### 2.1 Stored Procedures & Snowflake Scripting
+
+#### Why Procedural SQL Exists
+
+Standard SQL is **declarative** - you describe *what* you want (e.g., “select all orders from Germany”), and the engine decides *how* to get it.  
+
+However, in real-world pipelines, you often need **multi-step logic**:
+- Conditional flows (`IF / ELSE`)
+- Loops
+- Variables and intermediate results
+- Error handling
+- Controlled transactions (BEGIN / COMMIT / ROLLBACK)
+
+That’s where **Procedural SQL** and **Stored Procedures** come in - they let you write **scripts** that orchestrate complex transformations *inside Snowflake itself*.
+
+---
+
+#### Two Ways to Write Logic in Snowflake
+
+| Language | Description | When to Use |
+|-----------|--------------|-------------|
+| **Snowflake Scripting (SQL dialect)** | Native procedural SQL syntax (similar to PL/SQL or T-SQL). | When you want to stay entirely in SQL. |
+| **JavaScript Stored Procedures** | Use JavaScript with SQL commands embedded (`snowflake.execute()`). | When logic or branching is complex (loops, string ops, API calls). |
+
+Both are **executed in Snowflake’s compute layer**, close to the data — no need to move data to Python or an external system.
+
+---
+
+#### Example 1 - Simple Snowflake Scripting Block
+
+```sql
+BEGIN
+    LET country := 'DE';
+    LET total := (SELECT COUNT(*) FROM orders WHERE country = :country);
+    RETURN 'Total orders for ' || :country || ' = ' || :total;
+END;
+```
+
+**Explanation:**
+1. `BEGIN ... END` defines a scripting block.  
+2. `LET` declares variables.  
+3. `:` is used to reference variables.  
+4. The script executes SQL and returns a string.
+
+Output example: _Total orders for DE = 13412_
+
+
+---
+
+**How it works — step by step**
+
+1. **Definition & Creation**  
+   - `CREATE OR REPLACE PROCEDURE` defines a *named routine* stored inside your database schema.  
+   - Once created, anyone with the right privileges can call it like a built-in function.
+
+2. **Return Type**  
+   - `RETURNS STRING` specifies the data type of what the procedure will return -  
+     in this case, just a simple message confirming the load.
+
+3. **Language Declaration**  
+   - `LANGUAGE SQL` tells Snowflake to interpret the body using **Snowflake Scripting syntax**,  
+     not JavaScript.  
+   - The body of the procedure is enclosed between the double dollar signs `$$ ... $$`.
+
+4. **Variable Declaration**  
+   - Inside the `DECLARE` block, `v_today` is defined as a variable and initialized to the current date.  
+   - You can later reference this variable using `:v_today`.
+
+5. **Business Logic**  
+   - The `INSERT INTO ... SELECT ...` statement loads only rows from `staging_sales`  
+     where `sales_date` equals the current date.  
+   - This keeps the daily load idempotent - it only touches the relevant partition.
+
+6. **Return Statement**  
+   - `RETURN 'Data loaded for ' || v_today;` concatenates a success message and returns it to the user.
+
+7. **Execution Context**  
+   - The whole block runs atomically: if any part fails, the entire transaction rolls back automatically.
+
+---
+
+**To run it:**
+
+```sql
+CALL load_daily_sales();
+```
+
+**Expected Output Example:**
+```
++------------------------------------+
+| CALL_RESULT |
++------------------------------------+
+| Data loaded for 2025-10-20 |
++------------------------------------+
+```
+
+**In short:**  
+This procedure represents a *basic daily ETL load pattern* in Snowflake - self-contained, reusable, and executed directly where the data lives.
+
+---
+
+#### Example 3 - Stored Procedure Using JavaScript
+
+Sometimes, more control or looping is needed. Snowflake also supports **JavaScript procedures** with embedded SQL.
+
+```sql
+CREATE OR REPLACE PROCEDURE merge_incremental()
+RETURNS STRING
+LANGUAGE JAVASCRIPT
+AS
+$$
+    var cmd = `
+        MERGE INTO fact_orders t
+        USING staging_orders s
+        ON t.order_id = s.order_id
+        WHEN MATCHED THEN UPDATE SET amount = s.amount
+        WHEN NOT MATCHED THEN INSERT (order_id, amount) VALUES (s.order_id, s.amount);
+    `;
+    snowflake.execute({sqlText: cmd});
+    return "Incremental merge completed.";
+$$;
+```
+
+**Key idea:**  
+- You can dynamically build SQL text and execute it.  
+- Perfect for looping over tables, handling errors, or running conditionally.
+
+---
+
+#### Control Flow Syntax (Quick Reference)
+
+| Structure | Example | Purpose |
+|------------|----------|----------|
+| **IF / ELSE** | `IF v_total > 0 THEN RETURN 'ok'; ELSE RETURN 'empty'; END IF;` | Conditional logic. |
+| **FOR loop** | `FOR rec IN (SELECT * FROM table) DO ... END FOR;` | Iterate over query results. |
+| **WHILE loop** | `WHILE v_count < 10 DO ... END WHILE;` | Repeat until condition met. |
+| **TRY / CATCH** | `EXCEPTION WHEN OTHERS THEN RETURN 'error';` | Error handling. |
+| **Transactions** | `BEGIN; ... COMMIT;` | Atomic group of statements. |
+
+---
+
+#### Analogy
+
+> Think of a stored procedure as a **recipe card** you keep in the kitchen (the database).  
+> Each time you “CALL” it, Snowflake follows the exact steps, using the freshest ingredients (current data).
+
+---
+
+#### Best Practices
+
+| Tip | Why it matters |
+|------|----------------|
+| Keep procedures small and modular. | Easier debugging and reuse. |
+| Use variables for parameters (dates, regions, etc.). | Avoid hardcoding. |
+| Include exception handling. | Prevent partial data loads. |
+| Log operations into an audit table. | Improves observability. |
+| Combine with **Streams + Tasks** (next sections). | Enables automated incremental pipelines. |
+
+---
+
+#### Quick Recap
+
+- [ ] I understand the difference between **declarative SQL** and **procedural SQL**.  
+- [ ] I know the two types of stored procedures: **SQL scripting** and **JavaScript**.  
+- [ ] I can create and call a basic stored procedure.  
+- [ ] I know how to use **variables, loops, and conditionals**.  
+- [ ] I understand why stored procedures are used in ETL/ELT workflows.
+
+---
+
+#### Example 3 - Stored Procedure Using JavaScript
+
+Sometimes, more control or looping is needed. Snowflake also supports **JavaScript procedures** with embedded SQL.
+
+```sql
+CREATE OR REPLACE PROCEDURE merge_incremental()
+RETURNS STRING
+LANGUAGE JAVASCRIPT
+AS
+$$
+    var cmd = `
+        MERGE INTO fact_orders t
+        USING staging_orders s
+        ON t.order_id = s.order_id
+        WHEN MATCHED THEN UPDATE SET amount = s.amount
+        WHEN NOT MATCHED THEN INSERT (order_id, amount) VALUES (s.order_id, s.amount);
+    `;
+    snowflake.execute({sqlText: cmd});
+    return "Incremental merge completed.";
+$$;
+```
+
+**Key idea:**  
+- You can dynamically build SQL text and execute it.  
+- Perfect for looping over tables, handling errors, or running conditionally.
+
