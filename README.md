@@ -146,15 +146,17 @@ Caching = reusing previous data or results to save time and cost.
 
 | Cache Type | Where | Stores | Reused When |
 |-------------|--------|---------|--------------|
-| **Result cache** | Cloud Services | Final results of identical queries | Same SQL *and* same data snapshot |
-| **Metadata cache** | Cloud Services | Micro-partition statistics | Always used for pruning |
-| **Local cache** | Compute layer | Recently read micro-partitions | Same warehouse runs again before suspension |
+| **Result cache** | Cloud Services Layer | Final results of identical queries | Same SQL *and* same data snapshot |
+| **Metadata cache** | Cloud Services Layer | Micro-partition statistics | Always used for pruning |
+| **Local cache** | Compute Layer | Recently read micro-partitions | Same warehouse runs again before suspension |
 
 ---
 
 ## Deep Dive - “Same SQL” and “Same Data”
 
-Snowflake has multiple caches that operate at different levels. For example, _Result Cache_ vs. _Local Cache_. Each one “remembers” something different. Let’s break them down:
+Snowflake has multiple caches that operate at different levels. As seen above, they are the _Result Cache_, _Local Cache_, and _Metadata Cache_.
+
+Each one “remembers” something different. Let’s break them down:
 
 ### Result Cache (Same SQL, Same Data)
 
@@ -194,25 +196,43 @@ SELECT SUM(amount) FROM orders WHERE region='Europe';
 These two queries are *not identical* SQL, so result cache can’t be used.  
 But the same data (`Europe` partitions) is already in memory → reused from **local cache**.
 
-> Think of it like fetching pages of a book to your desk: you can re-read or analyze them differently without going back to the library.
+> Think of it like fetching pages of a book to your desk: 
+> -> you can re-read or analyze them differently without going back to the library.
 
 ---
 
-### Metadata Cache — Used by the Optimizer
+### Metadata Cache (Used by the Optimizer)
 
-- Lives in the Cloud Services Layer.  
-- Stores micro-partition metadata (min/max values, row counts, etc.).  
-- Always active to help prune irrelevant data during query planning.
+The **Metadata Cache** is always active and operates behind the scenes in the **Cloud Services Layer**.
 
----
+#### What It Stores
+- Summary information (metadata) about each **micro-partition**:
+  - Minimum and maximum values per column, Row counts and null counts, File and partition locations, Data versioning information.
 
-### 🔄 Summary Table
+This metadata is lightweight but extremely valuable. 
 
-| Cache Type | Stored At | Stores | Reuse Conditions | Example |
-|-------------|------------|---------|------------------|----------|
-| **Result cache** | Cloud Services | Final query results | SQL identical, data unchanged | Re-running same COUNT query |
-| **Local cache** | Compute Layer | Micro-partitions in memory | Same warehouse, same data, not suspended | COUNT then SUM on same filter |
-| **Metadata cache** | Cloud Services | Partition statistics | Always active | Optimizer pruning |
+-> It allows the **optimizer** to know where data is located **without reading it first**.
+
+#### ⚙️ Why It Matters
+Before any query runs, the optimizer:
+1. Reads the metadata cache.  
+2. Determines which micro-partitions are **relevant** for your filters.  
+3. Skips the rest entirely — a process called **partition pruning**.
+
+This saves both time and compute cost because irrelevant data is never scanned.
+
+#### Example
+```sql
+SELECT SUM(amount)
+FROM orders
+WHERE order_date >= '2024-01-01';
+```
+
+Snowflake checks metadata:  
+- Partition 1 → max(order_date) = 2023-12-31 → ❌ skipped
+- Partition 2 → min(order_date) = 2024-01-01 → ✅ scanned
+
+No actual data is read until the optimizer knows exactly which partitions matter!
 
 ---
 
