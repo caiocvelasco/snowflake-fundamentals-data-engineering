@@ -213,11 +213,11 @@ This metadata is lightweight but extremely valuable.
 
 -> It allows the **optimizer** to know where data is located **without reading it first**.
 
-#### ⚙️ Why It Matters
+#### Why It Matters
 Before any query runs, the optimizer:
 1. Reads the metadata cache.  
 2. Determines which micro-partitions are **relevant** for your filters.  
-3. Skips the rest entirely — a process called **partition pruning**.
+3. Skips the rest entirely - a process called **partition pruning**.
 
 This saves both time and compute cost because irrelevant data is never scanned.
 
@@ -236,22 +236,122 @@ No actual data is read until the optimizer knows exactly which partitions matter
 
 ---
 
-### 🔐 1.7 Security Overview (RBAC Basics)
+### 1.7 Security Overview - Understanding RBAC (Role-Based Access Control)
 
-Snowflake uses **Role-Based Access Control** (RBAC):
-
-| Object | Grant example |
-|---------|----------------|
-| Database | `GRANT USAGE ON DATABASE sales TO ROLE analyst;` |
-| Schema | `GRANT USAGE ON SCHEMA sales.public TO ROLE analyst;` |
-| Table | `GRANT SELECT ON TABLE sales.public.orders TO ROLE analyst;` |
-| Role assignment | `GRANT ROLE analyst TO USER caio;` |
-
-Roles → Privileges → Objects → Users.
+Snowflake’s security model is built on **Role-Based Access Control (RBAC)** —  
+every user acts *through a role*, and that role defines *what they can see or do*.
 
 ---
 
-### 🚀 1.8 Performance Optimization Techniques
+#### Core Principles
+
+| Concept | Description | Analogy |
+|----------|--------------|----------|
+| **Users** | Represent individual people or service accounts. | People entering a building. |
+| **Roles** | Define *sets of privileges* (what actions are allowed). | ID badges giving access to rooms. |
+| **Privileges** | Specific permissions (e.g., SELECT, INSERT, USAGE). | Keys that open certain doors. |
+| **Objects** | The things being protected (databases, schemas, tables, etc.). | The rooms themselves. |
+| **Grants** | Connect roles ↔ privileges ↔ objects ↔ users. | Giving a badge access to a door. |
+
+**Users never get direct privileges** - only roles do. This makes permission management cleaner and auditable.
+
+---
+
+#### Basic Hierarchy
+
+```text
+Role → Privilege → Object
+User → Role
+```
+
+Or in English:
+> A user has a role.
+> A role has privileges.
+> Privileges apply to objects (databases, schemas, tables...).
+
+#### Example - Creating and Assigning Roles
+
+```sql
+-- 1. Create a role for analysts
+CREATE ROLE analyst;
+
+-- 2. Grant privileges to that role
+GRANT USAGE ON DATABASE sales TO ROLE analyst;
+GRANT USAGE ON SCHEMA sales.public TO ROLE analyst;
+GRANT SELECT ON TABLE sales.public.orders TO ROLE analyst;
+
+-- 3. Assign role to user
+GRANT ROLE analyst TO USER caio;
+```
+
+Now user **Caio** can query the `orders` table via their `analyst` role. This avoids potential problems such as deleting data, accessing other databases or seeing sensitive information.
+
+---
+
+#### Role Hierarchies (Parent/Child Roles)
+
+Roles can inherit from other roles.  
+For example:
+
+```sql
+GRANT ROLE analyst TO ROLE senior_analyst;
+GRANT ROLE senior_analyst TO ROLE analytics_admin;
+```
+
+This creates a **role tree**:
+
+```
+analytics_admin
+   └── senior_analyst
+         └── analyst
+```
+
+The higher roles automatically inherit privileges from the lower ones.
+
+---
+
+#### System Roles
+
+Snowflake includes built-in roles:
+
+| Role | Description |
+|-------|--------------|
+| **ACCOUNTADMIN** | Full control over the account (everything). |
+| **SECURITYADMIN** | Manages roles, users, and grants. |
+| **SYSADMIN** | Manages databases, schemas, and objects. |
+| **PUBLIC** | Default role with minimal privileges. |
+
+**Best practice:**  
+Use _least privilege_ - give users the minimum necessary role to do their job.
+
+---
+
+#### Best Practices
+
+| Practice | Why it matters |
+|-----------|----------------|
+| Use role hierarchies | Simplifies permission management. |
+| Never assign privileges directly to users | Keeps audits and role rotations clean. |
+| Create separate roles for read, write, admin | Clear separation of duties. |
+| Regularly review grants | Prevent privilege creep. |
+
+---
+
+#### Summary
+
+| Level | Example | Description |
+|--------|----------|-------------|
+| **Database** | `GRANT USAGE ON DATABASE sales TO ROLE analyst;` | Grants visibility to a database. |
+| **Schema** | `GRANT USAGE ON SCHEMA sales.public TO ROLE analyst;` | Allows seeing objects in a schema. |
+| **Table** | `GRANT SELECT ON TABLE sales.public.orders TO ROLE analyst;` | Allows querying a table. |
+| **Role assignment** | `GRANT ROLE analyst TO USER caio;` | Gives user access through a role. |
+
+🧭 **Roles → Privileges → Objects → Users**  
+This chain defines *everything* about access in Snowflake.
+
+---
+
+### 1.8 Performance Optimization Techniques
 
 | Area | Technique | Why it helps |
 |-------|------------|--------------|
