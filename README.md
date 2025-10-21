@@ -7,7 +7,7 @@ Welcome! This guide covers the **four essential pillars** of Snowflake mastery -
 ## Table of Contents
 
 1. [Snowflake Architecture & Performance Fundamentals](#1-snowflake-architecture--performance-fundamentals)
-2. Procedural SQL, Streams & Tasks  
+2. [Procedural SQL, Streams & Tasks](#2-procedural-sql-streams--tasks)  
 3. S3 Integration & Data Loading  
 4. Matillion Orchestration & ELT Design  
 
