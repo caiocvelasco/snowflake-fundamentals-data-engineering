@@ -128,12 +128,12 @@ No data is stored here - it’s all **metadata, orchestration, and optimization*
 
 ---
 
-#### 🧠 The Optimizer - The Query "Planner"
+#### The Optimizer - The Query "Planner"
 
 When you submit a SQL query, the **Optimizer** (inside this layer) becomes the planner and strategist.
 
 **Its goal:**  
-👉 Transform your SQL statement into the *most efficient execution plan possible.*
+-> Transform your SQL statement into the *most efficient execution plan possible.*
 
 **Key Responsibilities:**
 1. **Parse and rewrite SQL** - validate syntax, resolve references, and simplify logic.  
@@ -747,7 +747,7 @@ $$;
    Declares a JavaScript variable `cmd` containing a SQL statement as a string (here, the MERGE logic).  
    The backticks (`` ` ``) let you use multi-line SQL text easily.
 
-6. **`MERGE INTO fact_orders ...` — Upsert logic**  
+6. **`MERGE INTO fact_orders ...` - Upsert logic**  
    - This SQL statement performs an **upsert** (update + insert) between two tables:  
      the target table `fact_orders` and the source `staging_orders`.  
    - It matches rows by `order_id`:  
@@ -821,18 +821,102 @@ It’s especially useful when:
 
 ---
 
-### 2.2 FOcusing on MERGE Statements - Performing Efficient Upserts
+### 2.2 Incremental Strategies: Full Incremental Loads vs. Partitioned Incremental Loads
+
+In data pipelines, not all updates are equal.  
+Some processes need to refresh **all data since the last load**, while others only process **the most recent slice of data** (for example, *today’s sales*).
+
+These two strategies are known as **full incremental loads** and **partitioned incremental loads**.
+
+---
+
+#### Clarifying the Word “Partition”
+
+In this context, the word *partition* does **not** refer to:
+- **S3 partitions** - the folder-based organization in external storage (e.g. `year=2025/month=10/`), or  
+- **Snowflake micro-partitions** - the automatic internal storage chunks Snowflake uses for pruning.
+
+Here, *partition* means a **logical subset of data** based on a business key - usually a **date column** such as `sales_date`, `event_date`, or `updated_at`.  
+It’s the *portion of data* we choose to process at a given time (e.g., “today’s data”).
+
+---
+
+#### Full Incremental Loads
+
+**Definition:**  
+Reload and synchronize *all changed or new records* since the last load, regardless of their date or logical partition.
+
+**Example use cases:**
+- Refreshing a large fact table (`fact_sales`) using all rows from `staging_sales`.
+- Jobs where late-arriving data can modify multiple past days.
+
+**Advantages:**
+- Ensures complete consistency across all dates.  
+- Captures late updates and corrections in historical data.
+
+**Drawbacks:**
+- Scans and compares much more data → **higher compute cost**.  
+- **Slower** for very large staging tables.
+
+---
+
+#### Partitioned Incremental Loads
+
+**Definition:**  
+Process only a **specific logical partition** (e.g., one day’s worth of data).  
+The load logic filters by a column like `sales_date = CURRENT_DATE()`.
+
+**Example use cases:**
+- Daily jobs that only ingest *today’s* transactions.  
+- Streaming or near-real-time ingestion where only the most recent data matters.
+
+**Advantages:**
+- **Faster** and **cheaper** - only a small subset of rows is processed.  
+- Ideal for append-only event or transaction tables.
+
+**Drawbacks:**
+- Historical corrections (e.g., backdated orders) are ignored unless reprocessed manually.  
+- Requires **extra handling** for *late-arriving* or *out-of-order* data.
+
+---
+
+#### Why It Matters in Snowflake
+
+Snowflake’s architecture (with automatic **micro-partition pruning** and **metadata caching**) makes both patterns efficient.  
+However, choosing the right **incremental strategy** has major performance and cost implications:
+
+| Scenario | Recommended Pattern |
+|-----------|--------------------|
+| Frequent updates across multiple dates | Full Incremental |
+| Append-only or daily event ingestion | Partitioned Incremental |
+| Low-latency dashboards or streaming micro-batches | Partitioned Incremental |
+| Historical corrections or late-arriving data | Full Incremental |
+
+---
+
+**Summary:**  
+- Both methods rely on **MERGE statements** to synchronize source and target tables.  
+- Example 1 (next section) demonstrates a **Full Incremental Load** (all rows).  
+- Example 2 refines that with a **Partitioned Incremental Load**, filtering by date *inside* the MERGE - processing only the relevant logical partition of data.
+
+### 2.3 Understanding MERGE Statements - Performing Efficient Upserts
 
 #### Why MERGE Exists
 
-In data pipelines, you often need to **synchronize a target table** (e.g. `fact_sales`)  
-with new or changed records from a source table (e.g. `staging_sales`).  
+In data pipelines, you often need to **synchronize a target table** (e.g., `fact_sales`)  
+with new or changed records from a source table (e.g., `staging_sales`).
 
-Before MERGE, this required two separate steps:
-1. `UPDATE` existing rows (if they already exist in the target).
-2. `INSERT` new rows (if they don’t exist yet).
+Historically, this was done using **two separate SQL statements**:
+1. `UPDATE` existing rows (to refresh records that already exist in the target).
+2. `INSERT` new rows (for records not yet present).
 
-MERGE combines both into **one atomic statement** - faster, safer, and cleaner.
+That approach worked, **but it required multiple steps and manual transaction handling**  
+to ensure that both actions succeeded together - otherwise, data could become inconsistent.
+
+The **MERGE** statement was introduced to solve this problem by combining both actions into  
+a **single atomic operation**: if any part fails, nothing is applied. 
+
+This makes MERGE not only faster, but also safer and easier to maintain in production pipelines.
 
 ---
 
@@ -855,7 +939,7 @@ WHEN NOT MATCHED THEN INSERT (...columns...) VALUES (...values...);
 
 ---
 
-#### Example 1 - Basic MERGE for Daily Sales Loads
+#### Example 1 - Basic MERGE for Daily Sales Loads ("(Daily) Full Incremental Load")
 
 **Business Goal:**  
 This MERGE keeps the `fact_sales` table synchronized with the latest daily data from `staging_sales`.  
@@ -863,7 +947,7 @@ Each day, new transactions arrive in the staging area. The MERGE ensures:
 - existing sales are **updated** if their amounts change (e.g., refunds, adjustments), and  
 - new orders are **inserted** seamlessly.  
 
-This pattern is a classic **daily incremental load** used in finance, retail, and e-commerce ETL pipelines.
+This pattern is a classic **Daily Incremental Load**, common in finance, retail, and e-commerce pipelines.
 
 ```sql
 MERGE INTO fact_sales AS t
@@ -878,22 +962,113 @@ WHEN NOT MATCHED THEN
     VALUES (s.order_id, s.amount, s.sales_date, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP());
 ```
 
-**What happens here:**
-1. For each row in `staging_sales`, Snowflake checks if the same `order_id` exists in `fact_sales`.  
-2. If found → update the amount and timestamp.  
-3. If not found → insert it as a new row.  
-4. The entire process is **atomic** - either all updates succeed or none do.  
+---
+
+### How it works - step by step
+
+1. **`MERGE INTO fact_sales AS t`**  
+   - Defines the **target table** (`t`) that will be updated or inserted into.  
+   - Think of this as your main *fact table* that stores finalized, clean data.
+
+2. **`USING staging_sales AS s`**  
+   - Defines the **source table** (`s`) - where new or changed records arrive daily.  
+   - Typically populated by ingestion jobs or external data loads.
+
+3. **`ON t.order_id = s.order_id`**  
+   - This is the **matching condition** (the join key).  
+   - Snowflake compares each `order_id` in the source against the target.  
+   - If a match is found, the existing row in the target is a **candidate for update**.
+
+4. **`WHEN MATCHED THEN UPDATE SET ...`**  
+   - If the same `order_id` exists in both tables, update specific columns - here, we refresh `amount` and `updated_at`.  
+   - This ensures that any price corrections or adjustments are reflected in the fact table.
+
+5. **`WHEN NOT MATCHED THEN INSERT (...) VALUES (...)`**  
+   - If no row exists with that `order_id`, Snowflake inserts a **new record** into `fact_sales`.  
+   - ⚠️ **Note:** You must explicitly list all target columns and their corresponding values - for example, `(order_id, amount, sales_date, created_at, updated_at)` followed by `VALUES (s.order_id, s.amount, s.sales_date, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())`.  
+   - This explicit mapping prevents data misalignment if column orders change or if the staging table contains extra fields.  
+   - ✅ **In practice**, data teams handle large tables (sometimes with hundreds of columns) by **automating this step** using:
+     - **dbt macros** to dynamically generate the column list (`{{ get_insert_columns('fact_sales') }}`),  
+     - **Python or SQL templating** for dynamic SQL in stored procedures, or  
+     - **views** that expose only the needed columns, simplifying the MERGE statement.  
+   - This approach keeps the MERGE operation both **safe** and **maintainable**, even at scale.
+
+6. **Atomic execution**  
+   - Both `UPDATE` and `INSERT` actions are part of one **atomic operation**.  
+   - If anything fails (e.g., constraint violation), the entire transaction rolls back -  
+     leaving the target table consistent.
+
+7. **Merging ALL rows (Full Incremental Sync) vs. Filtering Source Table in Merging (Partitioned Incremental Sync)**  
+   - The next example introduces a **key variation**: instead of merging *all rows* from `staging_sales`, it filters the **source inside the MERGE** (e.g., `WHERE sales_date = CURRENT_DATE()`).  
+   - This makes the operation more efficient for **daily or real-time pipelines**, as only the relevant subset of data (today’s transactions) is processed atomically.  
+   - In other words, Example 1 handles a **full incremental sync**, while Example 2 focuses on a **partitioned, filtered sync**.
 
 ---
 
-#### Example 2 - MERGE with a Filtered Source
+### Visualizing the MERGE
+
+**Before the MERGE**
+
+| **fact_sales** (target) | | |
+| order_id | amount | updated_at |
+|-----------|---------|------------|
+| 1 | 100 | 2025-10-18 |
+| 2 | 200 | 2025-10-18 |
+
+| **staging_sales** (source) | | |
+| order_id | amount | sales_date |
+|-----------|---------|------------|
+| 2 | 220 | 2025-10-19 |
+| 3 | 150 | 2025-10-19 |
+
+---
+
+**Step-by-step:**
+
+- Row with `order_id = 2` exists in both tables → **UPDATE** → amount changes from **200 → 220** and timestamp refreshes.  
+- Row with `order_id = 3` exists only in source → **INSERT** → new sale added to the fact table.  
+- Row with `order_id = 1` exists only in target → **no change**.
+
+---
+
+**After the MERGE**
+
+| **fact_sales (target)** | | |
+| order_id | amount | updated_at |
+|-----------|---------|------------|
+| 1 | 100 | 2025-10-18 |
+| 2 | 220 | 2025-10-19 |
+| 3 | 150 | 2025-10-19 |
+
+The fact table now reflects both the updated and newly inserted records - all done in a single, efficient statement.
+
+---
+
+**Summary:**
+- MERGE automates incremental synchronization.  
+- It eliminates the need for separate `UPDATE` and `INSERT` statements.  
+- It keeps your fact table up-to-date with minimal logic and guaranteed consistency.  
+- ⚠️ **Note:** This operation overwrites existing data (no history tracking).  
+  If you need to preserve historical versions, you’d need a **Type 2 SCD (Slowly Changing Dimension)** design instead.
+
+---
+
+#### Example 2 - MERGE with a Filtered Source ("(Daily or Real-Time) Partitioned Incremental Load")
+
+**Main Difference from Example 1:**  
+The previous MERGE processed *all available records* in `staging_sales`.  
+This one filters the **Source inside the MERGE itself**, so only *today’s data* is processed - a much more efficient pattern for daily or real-time pipelines.
+
+---
 
 **Business Goal:**  
 This MERGE is used in a **scheduled job** that only processes the current day’s data, avoiding unnecessary work.  
-By filtering the source inside the MERGE, it ensures only *today’s* rows are evaluated atomically - perfect for near-real-time ingestion pipelines where you only want to update the active partition.  
+By filtering the source inside the MERGE, it ensures only *today’s* rows are evaluated atomically (Snowflake evaluates the filter and applies the merge as one transaction) - perfect for near-real-time ingestion pipelines where you only want to update the active partition.  
 
 Common use cases include **daily sales snapshots**, **rolling inventory updates**,  
-or **transaction feeds** coming from an external system like Stripe or Shopify.
+or **transaction feeds** coming from external systems like Stripe or Shopify.
+
+---
 
 ```sql
 MERGE INTO fact_sales AS t
@@ -906,18 +1081,102 @@ WHEN NOT MATCHED THEN INSERT (order_id, amount, sales_date)
 VALUES (s.order_id, s.amount, s.sales_date);
 ```
 
-**Why this is important:**  
-Filtering inside the `USING` clause (instead of before running the MERGE)  
-ensures the source dataset is evaluated once and atomically with the operation.
+---
+
+### How it works - step by step
+
+1. **Filtered Source Subquery**  
+   - The `USING (...)` clause contains a subquery:  
+     ```sql
+     SELECT * FROM staging_sales WHERE sales_date = CURRENT_DATE()
+     ```  
+   - This limits the source to only *today’s* rows before any MERGE logic runs.  
+   - Unlike pre-filtering the table in a temporary step, this approach is **atomic** -  
+     Snowflake evaluates the filter and applies the merge as one transaction.
+
+2. **Join Condition**  
+   - `ON t.order_id = s.order_id` compares the filtered source with the target.  
+   - Only today's orders are checked - historical rows remain untouched.
+
+3. **Matched Rows → UPDATE**  
+   - If an order from today already exists in the fact table, update its amount (for example, a price correction).  
+   - The target remains current without duplicating records.
+
+4. **Unmatched Rows → INSERT**  
+   - If an order doesn’t exist yet, insert it with the same columns: `(order_id, amount, sales_date)`.  
+   - This captures new daily transactions efficiently.
+
+5. **Performance Advantage**  
+   - Filtering inside the MERGE avoids scanning the entire staging table.  
+   - This is especially useful for **large tables** with historical data, as only a small, relevant subset (today’s "partition") is processed.
+
+6. **Atomic Operation**  
+   - The MERGE (with its internal filter) is evaluated as a single, consistent transaction - ensuring that no records are missed or double-processed if another job runs concurrently.
+
+---
+
+### Mini Example - Visualizing the Filtered Merge
+
+**Before the MERGE**
+
+| **fact_sales** (target) | | |
+| order_id | amount | sales_date |
+|-----------|---------|-------------|
+| 100 | 90 | 2025-10-19 |
+| 101 | 120 | 2025-10-19 |
+
+| **staging_sales** (source)** | | |
+| order_id | amount | sales_date |
+|-----------|---------|-------------|
+| 101 | 130 | 2025-10-20 |
+| 102 | 50 | 2025-10-20 |
+| 103 | 75 | 2025-10-18 |  
+
+---
+
+**Step-by-step:**  
+
+- The filter `WHERE sales_date = CURRENT_DATE()` selects only rows for **2025-10-20**.  
+  So only `order_id = 101` and `102` are considered.  
+- `order_id = 101` → **MATCHED** → UPDATE `amount` from `120 → 130`.  
+- `order_id = 102` → **NOT MATCHED** → INSERT as a new record.  
+- `order_id = 103` (from two days ago) → ignored (outside the filter).
+
+---
+
+**After the MERGE**
+
+| **fact_sales (target)** | | |
+| order_id | amount | sales_date |
+|-----------|---------|-------------|
+| 100 | 90 | 2025-10-19 |
+| 101 | 130 | 2025-10-20 |
+| 102 | 50 | 2025-10-20 |
+
+Only the active day’s partition was processed - faster, safer, and fully atomic.
+
+---
+
+**Summary:**
+- Filtering **inside** the MERGE keeps the operation atomic and efficient.  
+- Perfect for **daily partitions** or **streaming ingestion** use cases.  
+- Avoids unnecessary reads and reduces cost for large staging tables.  
+- ⚠️ **Note:** Like before, this MERGE overwrites the current state - it doesn’t maintain history.
+
 
 ---
 
 #### Analogy
 
-> Think of MERGE as a **smart librarian** updating a catalog:  
-> - If a book already exists → update its details.  
-> - If it’s a new book → add it to the shelf.  
-> - All changes are made in one organized step, not two separate passes.
+> Think of `MERGE` as a **smart librarian** updating a catalog:  
+> - If a book already exists → they **update** its details (e.g., a new edition).  
+> - If it’s a new book → they **add** it to the shelf.  
+> - Everything happens in **one organized step**, not two separate passes.  
+>
+> In a **full incremental load**, the librarian checks **the entire catalog** every time.  
+> In a **partitioned incremental load**, they only look at **today’s new arrivals** —  
+> faster, cheaper, and still perfectly accurate for the day’s work.
+
 
 ---
 
@@ -925,9 +1184,9 @@ ensures the source dataset is evaluated once and atomically with the operation.
 
 | Scenario | Typical Columns | Purpose |
 |-----------|------------------|----------|
-| **Fact table upsert** | `order_id`, `date` | Load new daily transactions and update existing ones. |
-| **Dimension table refresh** | `customer_id` | Sync changing attributes like names or status. |
-| **CDC integration** | `record_id`, `operation` | Apply inserts/updates/deletes from a change log stream. |
+| **Fact table upsert** | `order_id`, `sales_date` | Load new transactions and update existing ones (daily loads). |
+| **Dimension table refresh** | `customer_id` | Sync changing attributes like name, tier, or status (Type 1 SCD). |
+| **CDC (Change Data Capture)** | `record_id`, `operation` | Apply inserts/updates/deletes from a change log stream. |
 
 ---
 
@@ -935,23 +1194,25 @@ ensures the source dataset is evaluated once and atomically with the operation.
 
 | Practice | Why it matters |
 |-----------|----------------|
-| **Cluster or partition target table** | Improves merge speed and pruning on join keys. |
-| **Filter the source** | Avoid merging irrelevant rows. |
-| **Avoid updating many columns** | Increases micro-partition rewrites. |
-| **Track affected rows** | Use `RESULT_SCAN(LAST_QUERY_ID())` to review merge results. |
-| **Combine with Streams** | Enables continuous incremental merges (covered next). |
+| **Cluster or partition the target table** | Improves performance through micro-partition pruning on join keys. |
+| **Filter the source** | Avoids scanning irrelevant rows (especially for daily or partitioned merges). |
+| **Update only necessary columns** | Reduces micro-partition rewrites and storage overhead. |
+| **Track affected rows** | Use `RESULT_SCAN(LAST_QUERY_ID())` to monitor how many rows were updated or inserted. |
+| **Combine with Streams or Tasks** | Enables automated, continuous incremental merges (covered next). |
+| **Use staging schemas for safety** | Prevents accidental overwrites of production data. |
 
 ---
 
 #### Inspecting Merge Results
 
-After a MERGE runs, you can query how many rows were updated or inserted using Snowflake’s metadata functions:
+After a MERGE finishes, Snowflake stores summary statistics for that query execution.  
+You can access them immediately using `RESULT_SCAN(LAST_QUERY_ID())`:
 
 ```sql
 SELECT * FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()));
 ```
 
-This returns counts like:
+Typical output:
 
 ```
 rows_inserted | rows_updated | rows_deleted
@@ -959,18 +1220,25 @@ rows_inserted | rows_updated | rows_deleted
 1024 | 354 | 0
 ```
 
+This is useful for **logging**, **monitoring**, or **data quality checks** - especially inside stored procedures or automated tasks.
 
 ---
 
-#### Quick Recap
+#### Quick Recap Checklist
 
-- [ ] MERGE combines `INSERT` and `UPDATE` in one atomic statement.  
-- [ ] The `ON` clause defines how rows in target and source match.  
-- [ ] Each branch (`WHEN MATCHED` / `WHEN NOT MATCHED`) defines what happens.  
-- [ ] Useful for **upserts**, **slowly changing dimensions**, and **CDC**.  
-- [ ] Often used inside stored procedures or tasks.  
+- [ ] I understand how `MERGE` combines **INSERT** and **UPDATE** into one atomic statement.  
+- [ ] I can explain the difference between **full** and **partitioned** incremental loads.  
+- [ ] I know how to interpret the `ON`, `WHEN MATCHED`, and `WHEN NOT MATCHED` clauses.  
+- [ ] I know when to apply `MERGE` to facts, dimensions, or CDC streams.  
+- [ ] I can check merge results using `RESULT_SCAN(LAST_QUERY_ID())`.  
 
 ---
+
+**Summary:**  
+> The `MERGE` command is the backbone of incremental loading in Snowflake —  
+> enabling atomic, auditable synchronization between staging and target tables.  
+> In the next section, you’ll see how **Streams** build on top of this concept  
+> to track table changes automatically.
 
 
 
