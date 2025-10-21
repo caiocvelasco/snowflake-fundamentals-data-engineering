@@ -1009,13 +1009,13 @@ WHEN NOT MATCHED THEN
 
 **Before the MERGE**
 
-| **fact_sales** (target) | | |
+*fact_sales* (target)
 | order_id | amount | updated_at |
 |-----------|---------|------------|
 | 1 | 100 | 2025-10-18 |
 | 2 | 200 | 2025-10-18 |
 
-| **staging_sales** (source) | | |
+*staging_sales* (source)
 | order_id | amount | sales_date |
 |-----------|---------|------------|
 | 2 | 220 | 2025-10-19 |
@@ -1033,7 +1033,7 @@ WHEN NOT MATCHED THEN
 
 **After the MERGE**
 
-| **fact_sales (target)** | | |
+*fact_sales* (target)
 | order_id | amount | updated_at |
 |-----------|---------|------------|
 | 1 | 100 | 2025-10-18 |
@@ -1119,13 +1119,13 @@ VALUES (s.order_id, s.amount, s.sales_date);
 
 **Before the MERGE**
 
-| **fact_sales** (target) | | |
+*fact_sales* (target)
 | order_id | amount | sales_date |
 |-----------|---------|-------------|
 | 100 | 90 | 2025-10-19 |
 | 101 | 120 | 2025-10-19 |
 
-| **staging_sales** (source)** | | |
+*staging_sales* (source)
 | order_id | amount | sales_date |
 |-----------|---------|-------------|
 | 101 | 130 | 2025-10-20 |
@@ -1146,7 +1146,7 @@ VALUES (s.order_id, s.amount, s.sales_date);
 
 **After the MERGE**
 
-| **fact_sales (target)** | | |
+**fact_sales (target)**
 | order_id | amount | sales_date |
 |-----------|---------|-------------|
 | 100 | 90 | 2025-10-19 |
@@ -1174,7 +1174,7 @@ Only the active day’s partition was processed - faster, safer, and fully atomi
 > - Everything happens in **one organized step**, not two separate passes.  
 >
 > In a **full incremental load**, the librarian checks **the entire catalog** every time.  
-> In a **partitioned incremental load**, they only look at **today’s new arrivals** —  
+> In a **partitioned incremental load**, they only look at **today’s new arrivals** -  
 > faster, cheaper, and still perfectly accurate for the day’s work.
 
 
@@ -1235,10 +1235,328 @@ This is useful for **logging**, **monitoring**, or **data quality checks** - esp
 ---
 
 **Summary:**  
-> The `MERGE` command is the backbone of incremental loading in Snowflake —  
+> The `MERGE` command is the backbone of incremental loading in Snowflake -  
 > enabling atomic, auditable synchronization between staging and target tables.  
 > In the next section, you’ll see how **Streams** build on top of this concept  
 > to track table changes automatically.
+
+---
+
+## 2.4 Streams - Tracking Table Changes (Change Data Capture)
+
+### DML - Data Manipulation Language
+
+Before we can talk about **Change Data Capture (CDC)**, we need to revisit a fundamental idea every data engineer should know from day one:
+
+> **Data changes over time.**  
+> Tables aren’t static - new rows appear, existing ones evolve, and others are removed.
+
+This concept is formalized in SQL under the umbrella of **DML (Data Manipulation Language)** - the commands responsible for modifying data in a table.
+
+| Action | Description |
+|---------|--------------|
+| **INSERT** | Add new records. |
+| **UPDATE** | Modify existing records. |
+| **DELETE** | Remove records. |
+
+As data engineers, our job is to **capture and process these changes efficiently**.  
+That means designing systems that can detect when and how data has changed - not just new inserts, but also updates and deletions - without reloading entire tables.
+
+> In everyday terms: data is **added**, **modified**, or **removed**.  
+> In database terms: a **DML statement** performs an **INSERT**, **UPDATE**, or **DELETE**.
+
+### Understanding Change Data Capture (CDC)
+
+In modern data pipelines, it’s inefficient to reload entire tables every time data changes.  
+Instead, we use **Change Data Capture (CDC)** - a design pattern that focuses on detecting and processing **only the rows that changed** (INSERT, UPDATE, DELETE) since the last run.
+
+**Goal:**  
+> Capture **only** the **delta**, not the full dataset.
+
+Different systems implement CDC differently:
+
+| CDC Method | How It Works | Example Tools |
+|-------------|--------------|----------------|
+| **Log-based CDC** | Reads database transaction logs to detect row-level changes. | `Debezium`, `Fivetran`, `Kafka Connect` |
+| **Trigger-based CDC** | Uses triggers to log changes into audit tables. | `PostgreSQL`, `MySQL` triggers |
+| **Timestamp-based CDC** | Filters rows using last-updated timestamps. | `dbt` incremental models, `SQL` scripts |
+| **Metadata-based CDC (Snowflake Streams)** | Uses Snowflake’s internal metadata to track inserts, updates, and deletes. | ✅ Native to Snowflake |
+
+---
+
+### Why Streams Exist
+
+In previous sections, we saw how **MERGE** can synchronize data between tables:  
+- *Full Incremental MERGE* → merges **all records** from staging each day.  
+- *Partitioned Incremental MERGE* → merges **only a specific time window** (e.g., `WHERE sales_date = CURRENT_DATE()`).
+
+However, both approaches rely on **manual logic** to determine *what changed*.  
+You, the engineer, decide which data to merge - using timestamps, partitions, or custom filters.
+
+That works well for **append-only data** (e.g., new daily transactions) but becomes fragile when the source data also includes **updates** and **deletes**.
+
+In those cases:
+- You might miss changes if timestamps are inconsistent.  
+- You might reload unnecessary data, wasting compute.  
+- And most importantly - you can’t easily detect **deleted rows**,  
+  since a deleted record simply disappears from the source table.
+
+We need something smarter - a mechanism that can automatically track all **DML operations** (`INSERT`, `UPDATE`, and `DELETE`) as they happen, without scanning the whole table.
+
+That’s exactly what **Streams** provide.
+
+---
+
+### From MERGE to Streams - The Missing Link
+
+So far, our MERGE logic could **INSERT** and **UPDATE** rows efficiently.  
+But what happens if the source table also contains **DELETIONS** - rows that no longer exist?  
+A normal MERGE can’t detect those automatically, because it only sees the current snapshot of the source table.
+
+That’s where **Streams** come in.
+
+Streams continuously record **all DML operations** - `INSERT`, `UPDATE`, and `DELETE` - that occur on a table, storing this information as metadata. When you query the stream, you see not just new and changed rows, but also rows that were deleted.
+
+| Concept | Role |
+|----------|------|
+| **MERGE** | Applies the changes (`INSERT`, `UPDATE`, or `DELETE`) to the target. |
+| **STREAM** | Detects and exposes all the changes (the *memory* of what happened). |
+
+Together, they form a **native Change Data Capture (CDC) pipeline** -  
+where the stream tracks what changed, and the MERGE applies those changes atomically.
+
+---
+
+### How Streams Work
+
+1. You create a **stream** on a table (typically a staging or raw table).  
+2. Snowflake automatically logs every DML change (`INSERT`, `UPDATE`, `DELETE`) in internal metadata.  
+3. When you query the stream, it returns **only the changed rows** since the last read.  
+4. Once those changes are processed in a DML operation (like MERGE), the stream **advances its offset**, so the same changes aren’t returned again.
+
+---
+
+### Example 1 - Creating and Querying a Stream
+
+**Business Goal:**  
+This pattern demonstrates the *first step* in building a **Change Data Capture (CDC)** pipeline: creating a **Stream** on a source or staging table to automatically track every change.  
+
+By querying the stream, analysts or data engineers can inspect **which rows changed** (inserts, updates, or deletes) before those changes are applied downstream.  
+
+Common use cases:
+- Auditing or debugging changes in staging tables  
+- Monitoring incremental loads without full table scans  
+- Feeding deltas into downstream transformations or dashboards  
+
+```sql
+-- 1. Create a stream to track changes on staging_sales
+CREATE OR REPLACE STREAM stream_staging_sales
+ON TABLE staging_sales;
+
+-- 2. Insert new data into the source table as an example of new data coming in
+INSERT INTO staging_sales VALUES (101, '2025-10-20', 120.50, 'DE');
+
+-- 3. Query the stream to view only this delta
+SELECT * FROM stream_staging_sales;
+```
+
+**Output Example:**
+
+```
+order_id | sales_date | amount | country | METADATA$ACTION | METADATA$ISUPDATE
+---------+-------------+--------+----------+-----------------+-----------------
+101 | 2025-10-20 | 120.50 | DE | INSERT | FALSE
+```
+
+- `METADATA$ACTION` → shows the type of change (`INSERT`, `UPDATE`, or `DELETE`)  
+- `METADATA$ISUPDATE` → TRUE if the row was modified from a previous version  
+
+---
+
+### Step-by-Step Visualization
+
+**Before any change**
+
+*staging_sales*
+| order_id | amount | country |
+|-----------|---------|----------|
+| 100 | 90 | ES |
+
+**After an UPDATE**
+
+*staging_sales*
+| order_id | amount | country |
+|-----------|---------|----------|
+| 100 | **100** | ES |
+
+**What the Stream shows**
+
+*stream_staging_sales*
+| order_id | amount | country | METADATA$ACTION | METADATA$ISUPDATE |
+|-----------|---------|----------|-----------------|------------------|
+| 100 | 100 | ES | UPDATE | TRUE |
+
+✅ **Key difference:**  
+Instead of scanning or filtering the table, the stream *already knows* what changed - Snowflake records it automatically as metadata.
+
+---
+
+### Example 2 - Using a Stream in a MERGE (Native CDC Pattern)
+
+Now let’s connect this back to the MERGE concept we already know.
+
+**Business Goal:**  
+This pattern combines **Streams + MERGE** to form a fully automated **Change Data Capture (CDC)** workflow.  
+The Stream acts as the memory - it records *what* changed - while MERGE applies those changes atomically to the target table.  
+
+Each run processes **only new or modified rows** since the last run, eliminating manual filtering logic and enabling near–real-time synchronization between systems.  
+
+Common use cases:
+- Incremental updates to fact or dimension tables  
+- Real-time synchronization across environments (e.g., staging → production)  
+- Event-driven data ingestion pipelines from transactional sources like Stripe or Shopify
+
+```sql
+MERGE INTO fact_sales AS t
+USING (
+  SELECT order_id, sales_date, amount, country, METADATA$ACTION
+  FROM stream_staging_sales
+) AS s
+ON t.order_id = s.order_id
+WHEN MATCHED AND s.METADATA$ACTION = 'DELETE' THEN DELETE
+WHEN MATCHED AND s.METADATA$ACTION = 'UPDATE' THEN UPDATE SET t.amount = s.amount
+WHEN NOT MATCHED AND s.METADATA$ACTION = 'INSERT' THEN
+    INSERT (order_id, sales_date, amount, country)
+    VALUES (s.order_id, s.sales_date, s.amount, s.country);
+```
+
+---
+
+### How This Differs from Previous MERGE Examples
+
+| Step | Incremental MERGE | Stream-Based MERGE |
+|------|--------------------|--------------------|
+| **Data Source** | `staging_sales` table | `stream_staging_sales` object |
+| **Change Detection** | Manual - filters by date or timestamp | Automatic - metadata tracks deltas |
+| **Data Volume Scanned** | Potentially large (full or partitioned data) | Minimal (only changed rows) |
+| **Scheduling** | Batch (daily/hourly) | Continuous (micro-batch or near real-time) |
+| **Maintenance** | Must manage “last load” timestamp | Snowflake advances offset automatically |
+
+---
+
+### Side-by-Side Visualization
+
+#### Previous Incremental MERGE
+
+*Staging Table (input):*
+
+| order_id | amount | country | sales_date |
+|-----------|---------|----------|-------------|
+| 100 | 90 | ES | 2025-10-19 |
+| 101 | 120.50 | DE | 2025-10-20 |
+
+You manually filtered:  
+```sql
+SELECT * FROM staging_sales WHERE sales_date = CURRENT_DATE();
+```
+
+Then merged - scanning and deciding what changed.
+
+---
+
+#### Stream-Based MERGE
+
+**Stream (input):**
+
+| order_id | amount | country | METADATA$ACTION |
+|-----------|---------|----------|-----------------|
+| 101 | 120.50 | DE | INSERT |
+| 100 | 100 | ES | UPDATE |
+
+Snowflake *already* filtered and tagged these as deltas - so MERGE can just apply them atomically without scanning or filtering.
+
+---
+
+### In Summary
+
+> This MERGE pattern no longer depends on timestamps, partitions, or full scans.  
+> The **stream acts as the memory** of what changed,  
+> and **MERGE** is the action that applies those changes to keep your target table always up-to-date.
+
+---
+
+### Analogy
+
+> Think of a **security camera** watching your table:  
+> - It doesn’t record every second of footage.  
+> - It only keeps clips where something changed.  
+> - When you check the camera (query the stream), you see exactly what happened since the last time you looked.
+
+---
+
+### Stream Types
+
+| Type | Description | Typical Use |
+|-------|--------------|-------------|
+| **Standard Stream** | Tracks inserts, updates, and deletes since last consumption. | Most incremental ETL or CDC pipelines. |
+| **Append-Only Stream** | Tracks only inserts (no updates/deletes). | Immutable event data, append-only logs. |
+
+---
+
+### Important Notes
+
+| Concept | Description |
+|----------|--------------|
+| **Consumption** | Once a stream is read inside a DML (like MERGE), its offset advances - those changes won’t appear again. |
+| **Retention Period** | Default is 14 days; unconsumed changes expire afterward. |
+| **Dependencies** | Dropping or replacing the source table invalidates the stream. |
+| **Performance** | Streams store only metadata deltas - very lightweight. |
+
+---
+
+### Inspecting Stream Status
+
+```sql
+SHOW STREAMS;
+```
+
+Typical output:
+
+```
+name | table_name | type | stale | mode
+---------------------+------------------+-----------+-------+--------------
+STREAM_STAGING_SALES | STAGING_SALES | STANDARD | false | append_only
+```
+
+
+---
+
+### Best Practices
+
+| Practice | Why It Helps |
+|-----------|--------------|
+| Create streams on **staging or raw tables** | Keeps transformation logic separate from CDC tracking. |
+| **Consume regularly** (e.g., via Tasks) | Prevents data loss when retention expires. |
+| Combine with **MERGE** | Enables efficient, incremental upserts. |
+| Use **append-only** mode | Optimized for immutable data (no updates/deletes). |
+| Add **audit columns** (`created_at`, `updated_at`) | Simplifies validation and troubleshooting. |
+
+---
+
+### Quick Recap Checklist
+
+- [ ] Streams implement **native Change Data Capture (CDC)** in Snowflake.  
+- [ ] Each query returns only the **delta** since the last consumption.  
+- [ ] Streams work perfectly with **MERGE** to apply changes incrementally.  
+- [ ] Must be consumed regularly (default retention = 14 days).  
+- [ ] Streams + Tasks = fully automated CDC pipelines.
+
+---
+
+**Summary:**  
+> Snowflake Streams are a *built-in CDC mechanism*.  
+> They automatically record all inserts, updates, and deletes in a table,  
+> so your pipelines can process **only what changed** - efficiently, atomically, and without manual filtering.
 
 
 
