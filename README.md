@@ -6,10 +6,28 @@ Welcome! This guide covers the **four essential pillars** of Snowflake mastery -
 
 ## Table of Contents
 
-1. [Snowflake Architecture & Performance Fundamentals](#1-snowflake-architecture--performance-fundamentals)
+1. [Snowflake Architecture & Performance Fundamentals](#1-snowflake-architecture--performance-fundamentals)  
+   - [1.1 Why Snowflake Exists](#11-why-snowflake-exists)  
+   - [1.2 The Three-Layer Architecture](#12-the-three-layer-architecture)  
+   - [1.3 Storage Layer: Data & Micro-Partitions & Pruning](#13-storage-layer-data--micro-partitions--pruning)  
+   - [1.4 Compute Layer: Virtual Warehouses & Parallelism](#14-compute-layer-virtual-warehouses--parallelism)  
+   - [1.5 Cloud Services Layer: The “Brain”](#15-cloud-services-layer-the-brain)  
+   - [1.6 Caching: Remembering Previous Work](#16-caching-remembering-previous-work)  
+   - [1.7 Security Overview - Understanding RBAC](#17-security-overview---understanding-rbac)  
+   - [1.8 Performance Optimization Techniques](#18-performance-optimization-techniques)  
+   - [1.9 Visual Summary](#19-visual-summary)  
+   - [1.10 Quick Recap Checklist](#110-quick-recap-checklist)  
+
 2. [Procedural SQL, Streams & Tasks](#2-procedural-sql-streams--tasks)  
-3. S3 Integration & Data Loading  
-4. Matillion Orchestration & ELT Design  
+   - [2.1 Stored Procedures & Snowflake Scripting](#21-stored-procedures--snowflake-scripting)  
+   - [2.2 Incremental Strategies- Full Incremental Loads vs. Partitioned Incremental Loads](#22-incremental-strategies-full-incremental-loads-vs-partitioned-incremental-loads)  
+   - [2.3 Understanding MERGE Statements - Performing Efficient Upserts](#23-understanding-merge-statements---performing-efficient-upserts)  
+   - [2.4 Streams - Tracking Table Changes (Change Data Capture)](#24-streams---tracking-table-changes-change-data-capture)  
+   - [2.5 Tasks - Scheduling & Automation](#25-tasks---scheduling--automation)  
+
+3. [S3 Integration & Data Loading](#3-s3-integration--data-loading)  
+
+4. [Matillion Orchestration & ELT Design](#4-matillion-orchestration--elt-design)  
 
 ---
 
@@ -586,7 +604,7 @@ Out of 5 partitions, only 2 are read - 60% of the work is saved.
 
 ---
 
-### 1.9 Visual Summary - The Snowflake Engine
+### 1.9 Visual Summary
 
 ```
                         ┌───────────────────────────────┐
@@ -1557,6 +1575,216 @@ STREAM_STAGING_SALES | STAGING_SALES | STANDARD | false | append_only
 > Snowflake Streams are a *built-in CDC mechanism*.  
 > They automatically record all inserts, updates, and deletes in a table,  
 > so your pipelines can process **only what changed** - efficiently, atomically, and without manual filtering.
+
+## 2.5 Tasks - Scheduling & Automation
+
+### Why Tasks Exist
+
+In the previous sections, we built the foundations of a **modern Snowflake pipeline**:
+- **Stored Procedures** → reusable logic  
+- **MERGE** → synchronization between source and target tables  
+- **Streams** → automatic detection of inserts, updates, and deletes  
+
+Now we need a way to make this pipeline **run automatically** - every hour, every night, or whenever new data arrives. That’s the job of **Tasks** in Snowflake.
+
+A **Task** is a built-in scheduler that can:
+- Run SQL statements or stored procedures on a defined schedule  
+- Trigger other tasks to form multi-step workflows  
+- Handle dependency chains so steps run in the right order  
+- Operate entirely inside Snowflake (no Airflow, no cron)
+
+---
+
+### Orchestration and DAGs - The Broader Context
+
+#### Orchestration
+In data engineering, **orchestration** means coordinating multiple tasks that must run in sequence to produce a result.
+
+Example:
+1. Load raw data  
+2. Transform it into analytics-ready tables  
+3. Refresh dashboards  
+
+Each step depends on the one before it.
+
+#### DAG - Directed Acyclic Graph
+A **DAG** is the structure that represents those dependencies. It’s a **graph** of nodes (tasks) and arrows (dependencies).
+
+- **Directed** → Flow goes one way (Task A → Task B)  
+- **Acyclic** → No loops - a task never triggers itself again  
+
+Example DAG:
+
+    Load → Transform → Aggregate → Publish
+
+This same principle underlies `Airflow`, `Prefect`, and `Snowflake Tasks`.
+
+---
+
+### How Snowflake Tasks Work
+
+A **Task** is a Snowflake object that runs a SQL command or stored procedure:
+
+- Runs on a defined **schedule** (`CRON` or simple interval)  
+- Uses a chosen **warehouse** for compute  
+- Can depend on other tasks to form a DAG  
+- Can be suspended, resumed, or monitored  
+
+| Concept | Description |
+|----------|-------------|
+| **SQL Statement** | The query or procedure to execute |
+| **Schedule** | When it runs (`USING CRON` or `SCHEDULE='1 hour'`) |
+| **Warehouse** | Compute resource to use |
+| **Dependencies** | Other tasks that must finish first |
+
+---
+
+### Example 1 - Basic Task for MERGE
+
+**Business Goal:**  
+Automatically update the `fact_sales` table every hour with new and changed records from `staging_sales`.  
+This ensures continuous data freshness without manual execution.
+
+```sql
+    CREATE OR REPLACE TASK task_merge_sales
+      WAREHOUSE = my_wh
+      SCHEDULE = '1 HOUR'
+    AS
+      MERGE INTO fact_sales AS t
+      USING staging_sales AS s
+      ON t.order_id = s.order_id
+      WHEN MATCHED THEN UPDATE SET t.amount = s.amount
+      WHEN NOT MATCHED THEN
+        INSERT (order_id, amount, sales_date)
+        VALUES (s.order_id, s.amount, s.sales_date);
+```
+
+**Key points**
+- The warehouse `my_wh` resumes automatically for each run.  
+- The schedule `'1 HOUR'` executes hourly.  
+- Tasks can be paused/resumed:
+```sql
+   ALTER TASK task_merge_sales SUSPEND;
+   ALTER TASK task_merge_sales RESUME;
+```
+---
+
+### Example 2 - Task Triggering a Stored Procedure (Best Practice)
+
+In production, it’s better to call a **stored procedure** inside a task. This keeps orchestration logic clean and reusable.
+
+**Business Goal:**  
+Execute the `merge_stream_sales()` procedure (which performs a Stream + MERGE CDC operation) every hour. This pattern creates a **self-updating pipeline** where changes are detected, merged, and maintained automatically.
+
+Common use cases:
+- Hourly CDC updates  
+- Periodic fact table synchronization  
+- End-to-end ELT pipelines (extract → transform → load)
+
+```sql
+    CREATE OR REPLACE TASK task_stream_merge_sales
+      WAREHOUSE = my_wh
+      SCHEDULE = 'USING CRON 0 * * * * UTC'
+    AS
+      CALL merge_stream_sales();
+```
+---
+
+### Example 3 - Chained Tasks (Task DAG)
+
+Snowflake supports dependent tasks - define multi-step workflows directly in SQL.
+
+**Business Goal:**  
+Ensure that raw data is loaded from S3 before merging it into `fact_sales`.
+
+Pipeline flow:
+
+    task_load_raw → task_merge_fact
+
+```sql
+    -- 1. Load raw data
+    CREATE OR REPLACE TASK task_load_raw
+      WAREHOUSE = my_wh
+      SCHEDULE = 'USING CRON 0 * * * * UTC'
+    AS
+      COPY INTO staging_sales FROM @s3_stage;
+
+    -- 2. Merge into fact table
+    CREATE OR REPLACE TASK task_merge_fact
+      WAREHOUSE = my_wh
+      AFTER task_load_raw
+    AS
+      CALL merge_stream_sales();
+```
+
+---
+
+### Simple ASCII DAG Visualization
+
+```
+        ┌──────────────────┐
+        │  task_load_raw   │
+        │ (COPY from S3)   │
+        └────────┬─────────┘
+                 │
+                 ▼
+        ┌──────────────────┐
+        │ task_merge_fact  │
+        │ (Stream + MERGE) │
+        └──────────────────┘
+```
+
+Each run executes sequentially and atomically - no external scheduler required.
+
+---
+
+### Monitoring and Management
+
+| Command | Purpose |
+|----------|----------|
+| `SHOW TASKS;` | List all tasks and their status |
+| `ALTER TASK ... RESUME;` | Enable a suspended task |
+| `ALTER TASK ... SUSPEND;` | Disable a task |
+| `SYSTEM$TASK_HISTORY('task_name')` | View logs and errors |
+| `DROP TASK task_name;` | Remove a task |
+
+Example query:
+```sql
+    SELECT *
+    FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.TASK_HISTORY())
+    WHERE TASK_NAME = 'TASK_MERGE_SALES'
+    ORDER BY SCHEDULED_TIME DESC;
+```
+---
+
+### Best Practices
+
+| Practice | Why It Helps |
+|-----------|--------------|
+| Use stored procedures inside tasks | Keeps code modular and reusable |
+| Chain tasks using `AFTER` | Builds maintainable DAGs |
+| Use CRON for fine-grained control | Precise scheduling |
+| Always specify a warehouse | Tasks need compute |
+| Monitor `TASK_HISTORY` | Detect failures early |
+| Suspend unused tasks | Avoid extra costs |
+
+---
+
+### Quick Recap Checklist
+
+- [ ] I understand orchestration and DAGs.  
+- [ ] I can create a basic Task.  
+- [ ] I can schedule SQL and stored procedures.  
+- [ ] I can chain tasks using `AFTER`.  
+- [ ] I know how to monitor and manage tasks.  
+
+---
+
+**Summary:**  
+> **Tasks** are Snowflake’s built-in orchestration layer.  
+> They automate SQL or procedural logic and enable **end-to-end pipelines**  
+> that run on schedule - entirely inside Snowflake, no external tools required.
+
 
 
 
