@@ -124,11 +124,11 @@ GROUP BY region;
 
 The **Cloud Services Layer** is Snowflake’s *central nervous system*.  
 It coordinates all query operations and ensures that storage, compute, and user permissions work together smoothly.  
-No data is stored here — it’s all **metadata, orchestration, and optimization**.
+No data is stored here - it’s all **metadata, orchestration, and optimization**.
 
 ---
 
-#### 🧠 The Optimizer — The Query "Planner"
+#### 🧠 The Optimizer - The Query "Planner"
 
 When you submit a SQL query, the **Optimizer** (inside this layer) becomes the planner and strategist.
 
@@ -136,11 +136,11 @@ When you submit a SQL query, the **Optimizer** (inside this layer) becomes the p
 👉 Transform your SQL statement into the *most efficient execution plan possible.*
 
 **Key Responsibilities:**
-1. **Parse and rewrite SQL** — validate syntax, resolve references, and simplify logic.  
-2. **Build an execution plan** — decide how to access tables, join them, and aggregate results.  
-3. **Leverage metadata cache** — determine which micro-partitions to read and which to skip (*partition pruning*).  
-4. **Select execution strategies** — e.g., hash join vs. broadcast join, aggregation order, etc.  
-5. **Distribute work** — assign tasks to compute nodes for parallel execution.  
+1. **Parse and rewrite SQL** - validate syntax, resolve references, and simplify logic.  
+2. **Build an execution plan** - decide how to access tables, join them, and aggregate results.  
+3. **Leverage metadata cache** - determine which micro-partitions to read and which to skip (*partition pruning*).  
+4. **Select execution strategies** - e.g., hash join vs. broadcast join, aggregation order, etc.  
+5. **Distribute work** - assign tasks to compute nodes for parallel execution.  
 
 **Analogy:**  
 > Think of the Optimizer as a head chef planning the entire recipe before anyone starts cooking.  
@@ -296,7 +296,7 @@ No actual data is read until the optimizer knows exactly which partitions matter
 
 ### 1.7 Security Overview - Understanding RBAC (Role-Based Access Control)
 
-Snowflake’s security model is built on **Role-Based Access Control (RBAC)** —  
+Snowflake’s security model is built on **Role-Based Access Control (RBAC)** -  
 every user acts *through a role*, and that role defines *what they can see or do*.
 
 #### Core Principles
@@ -428,7 +428,7 @@ It improves **partition pruning** - Snowflake can skip entire chunks of data bec
 ALTER TABLE orders CLUSTER BY (country, order_date);
 ```
 
-Now all rows with the same `country` and `order_date` ranges are near each other — pruning becomes sharper.
+Now all rows with the same `country` and `order_date` ranges are near each other - pruning becomes sharper.
 
 You can inspect clustering quality with:  
 ```sql
@@ -540,7 +540,7 @@ orders table
 └── Partition 5 → country=FR  (skipped)
 ```
 
-Out of 5 partitions, only 2 are read — 60% of the work is saved.
+Out of 5 partitions, only 2 are read - 60% of the work is saved.
 
 ---
 
@@ -653,7 +653,7 @@ That’s where **Procedural SQL** and **Stored Procedures** come in - they let y
 | **Snowflake Scripting (SQL dialect)** | Native procedural SQL syntax (similar to PL/SQL or T-SQL). | When you want to stay entirely in SQL. |
 | **JavaScript Stored Procedures** | Use JavaScript with SQL commands embedded (`snowflake.execute()`). | When logic or branching is complex (loops, string ops, API calls). |
 
-Both are **executed in Snowflake’s compute layer**, close to the data — no need to move data to Python or an external system.
+Both are **executed in Snowflake’s compute layer**, close to the data - no need to move data to Python or an external system.
 
 ---
 
@@ -667,70 +667,47 @@ BEGIN
 END;
 ```
 
-**Explanation:**
-1. `BEGIN ... END` defines a scripting block.  
-2. `LET` declares variables.  
-3. `:` is used to reference variables.  
-4. The script executes SQL and returns a string.
+**How it works - step by step**
 
-Output example: _Total orders for DE = 13412_
+1. **`BEGIN ... END` - Defines the scripting block**  
+   This marks the start and end of a self-contained Snowflake Scripting block.  
+   Everything inside executes as a single unit - like a small anonymous procedure.
 
+2. **`LET country := 'DE';` - Declares and initializes a variable**  
+   - `LET` is used to define variables.  
+   - Here, we create a variable called `country` and assign it the value `'DE'`.  
+   - Variables make your SQL more dynamic - you can reuse them in other queries.
 
----
+3. **`LET total := (SELECT COUNT(*) FROM orders WHERE country = :country);` - Executes a query into a variable**  
+   - This line runs a subquery and stores its result (the count of rows) into `total`.  
+   - The colon (`:`) before `country` means “use the variable’s value.”  
+   - After this line, `total` holds, for example, `13412`.
 
-**How it works — step by step**
+4. **`RETURN 'Total orders for ' || :country || ' = ' || :total;` - Returns the result**  
+   - The `||` operator concatenates strings and variable values.  
+   - This creates a text output like:  
+     ```
+     Total orders for DE = 13412
+     ```
+   - The block ends immediately after returning this string.
 
-1. **Definition & Creation**  
-   - `CREATE OR REPLACE PROCEDURE` defines a *named routine* stored inside your database schema.  
-   - Once created, anyone with the right privileges can call it like a built-in function.
-
-2. **Return Type**  
-   - `RETURNS STRING` specifies the data type of what the procedure will return -  
-     in this case, just a simple message confirming the load.
-
-3. **Language Declaration**  
-   - `LANGUAGE SQL` tells Snowflake to interpret the body using **Snowflake Scripting syntax**,  
-     not JavaScript.  
-   - The body of the procedure is enclosed between the double dollar signs `$$ ... $$`.
-
-4. **Variable Declaration**  
-   - Inside the `DECLARE` block, `v_today` is defined as a variable and initialized to the current date.  
-   - You can later reference this variable using `:v_today`.
-
-5. **Business Logic**  
-   - The `INSERT INTO ... SELECT ...` statement loads only rows from `staging_sales`  
-     where `sales_date` equals the current date.  
-   - This keeps the daily load idempotent - it only touches the relevant partition.
-
-6. **Return Statement**  
-   - `RETURN 'Data loaded for ' || v_today;` concatenates a success message and returns it to the user.
-
-7. **Execution Context**  
-   - The whole block runs atomically: if any part fails, the entire transaction rolls back automatically.
+5. **Execution context**  
+   - You can run this block directly in the Snowflake worksheet - no need to save it as a stored procedure.  
+   - It executes atomically: if any part fails, no partial result is left behind.
 
 ---
 
-**To run it:**
-
-```sql
-CALL load_daily_sales();
+**Output Example:** 
 ```
-
-**Expected Output Example:**
-```
-+------------------------------------+
-| CALL_RESULT |
-+------------------------------------+
-| Data loaded for 2025-10-20 |
-+------------------------------------+
+Total orders for DE = 13412
 ```
 
 **In short:**  
-This procedure represents a *basic daily ETL load pattern* in Snowflake - self-contained, reusable, and executed directly where the data lives.
+This block demonstrates the *core idea* of Snowflake Scripting - using variables, SQL queries, and logic inside a single executable block, all running **inside Snowflake’s compute engine**, close to your data.
 
 ---
 
-#### Example 3 - Stored Procedure Using JavaScript
+#### Example 2 - Stored Procedure Using JavaScript
 
 Sometimes, more control or looping is needed. Snowflake also supports **JavaScript procedures** with embedded SQL.
 
@@ -752,13 +729,58 @@ $$
 $$;
 ```
 
+**Explanation (step-by-step):**
+
+1. **`CREATE OR REPLACE PROCEDURE merge_incremental()`**  
+   Defines a stored procedure named `merge_incremental`. The parentheses indicate no input parameters.
+
+2. **`RETURNS STRING`**  
+   The procedure will return a text message once it completes (in this case, a success message).
+
+3. **`LANGUAGE JAVASCRIPT`**  
+   Tells Snowflake this procedure is written in JavaScript (not SQL Scripting).
+
+4. **`AS $$ ... $$`**  
+   Everything inside the double dollar signs **is the actual code body**.
+
+5. **`var cmd = \` ... \`;`**  
+   Declares a JavaScript variable `cmd` containing a SQL statement as a string (here, the MERGE logic).  
+   The backticks (`` ` ``) let you use multi-line SQL text easily.
+
+6. **`MERGE INTO fact_orders ...` — Upsert logic**  
+   - This SQL statement performs an **upsert** (update + insert) between two tables:  
+     the target table `fact_orders` and the source `staging_orders`.  
+   - It matches rows by `order_id`:  
+     - If a match exists → the row is **updated** (for example, the order already exists, but the `amount` has changed since the last load - we update the existing record accordingly).  
+     - If no match exists → the row is **inserted** as a new record (for example, a new order has been placed that didn’t exist in the fact table before).  
+   - This pattern keeps the fact table synchronized with the latest transactional data  
+     in a **single atomic operation**, avoiding separate `UPDATE` and `INSERT` steps.  
+   - ⚠️ **Note:** This operation **does not maintain historical versions** of changed rows.  
+     When a value (like `amount`) is updated, the old value is overwritten - it’s a *current-state sync*, not a *historical log*.  
+
+7. **`snowflake.execute({sqlText: cmd});`**  
+   Executes the SQL command stored in `cmd` within Snowflake’s compute environment.
+
+8. **`return "Incremental merge completed.";`**  
+   Returns a simple string message back to the caller.
+
+---
+
+**In summary:**  
+This stored procedure dynamically builds and executes a MERGE statement in JavaScript.  
+It’s especially useful when:
+- you need to loop through multiple tables or schemas,  
+- build SQL strings programmatically, or  
+- handle logic that SQL alone can’t express cleanly (conditions, exceptions, logs).
+
+
 **Key idea:**  
 - You can dynamically build SQL text and execute it.  
 - Perfect for looping over tables, handling errors, or running conditionally.
 
 ---
 
-#### Control Flow Syntax (Quick Reference)
+#### Examples of Control Flow Syntax (Quick Reference)
 
 | Structure | Example | Purpose |
 |------------|----------|----------|
@@ -770,7 +792,7 @@ $$;
 
 ---
 
-#### Analogy
+#### Snowflake Stored Procedure Analogy
 
 > Think of a stored procedure as a **recipe card** you keep in the kitchen (the database).  
 > Each time you “CALL” it, Snowflake follows the exact steps, using the freshest ingredients (current data).
@@ -799,35 +821,7 @@ $$;
 
 ---
 
-#### Example 3 - Stored Procedure Using JavaScript
-
-Sometimes, more control or looping is needed. Snowflake also supports **JavaScript procedures** with embedded SQL.
-
-```sql
-CREATE OR REPLACE PROCEDURE merge_incremental()
-RETURNS STRING
-LANGUAGE JAVASCRIPT
-AS
-$$
-    var cmd = `
-        MERGE INTO fact_orders t
-        USING staging_orders s
-        ON t.order_id = s.order_id
-        WHEN MATCHED THEN UPDATE SET amount = s.amount
-        WHEN NOT MATCHED THEN INSERT (order_id, amount) VALUES (s.order_id, s.amount);
-    `;
-    snowflake.execute({sqlText: cmd});
-    return "Incremental merge completed.";
-$$;
-```
-
-**Key idea:**  
-- You can dynamically build SQL text and execute it.  
-- Perfect for looping over tables, handling errors, or running conditionally.
-
----
-
-### 2.2 MERGE Statements — Performing Efficient Upserts
+### 2.2 FOcusing on MERGE Statements - Performing Efficient Upserts
 
 #### Why MERGE Exists
 
@@ -888,7 +882,7 @@ WHEN NOT MATCHED THEN
 1. For each row in `staging_sales`, Snowflake checks if the same `order_id` exists in `fact_sales`.  
 2. If found → update the amount and timestamp.  
 3. If not found → insert it as a new row.  
-4. The entire process is **atomic** — either all updates succeed or none do.  
+4. The entire process is **atomic** - either all updates succeed or none do.  
 
 ---
 
