@@ -5,6 +5,9 @@ Welcome! This guide covers the **four essential pillars** of Snowflake mastery -
 ---
 
 ## Table of Contents
+0. [What to Expect](#0-what-to-expect)  
+
+**Block 1 - A bit of DevOps & Architecture**
 
 1. [Snowflake Architecture & Performance Fundamentals](#1-snowflake-architecture--performance-fundamentals)  
    - [1.1 Why Snowflake Exists](#11-why-snowflake-exists)  
@@ -18,6 +21,8 @@ Welcome! This guide covers the **four essential pillars** of Snowflake mastery -
    - [1.9 Visual Summary](#19-visual-summary)  
    - [1.10 Quick Recap Checklist](#110-quick-recap-checklist)  
 
+**Block 2 - Data Transformation & Automation**
+
 2. [Procedural SQL, Streams & Tasks](#2-procedural-sql-streams--tasks)  
    - [2.1 Stored Procedures & Snowflake Scripting](#21-stored-procedures--snowflake-scripting)  
    - [2.2 Incremental Strategies- Full Incremental Loads vs. Partitioned Incremental Loads](#22-incremental-strategies-full-incremental-loads-vs-partitioned-incremental-loads)  
@@ -25,10 +30,59 @@ Welcome! This guide covers the **four essential pillars** of Snowflake mastery -
    - [2.4 Streams - Tracking Table Changes (Change Data Capture)](#24-streams---tracking-table-changes-change-data-capture)  
    - [2.5 Tasks - Scheduling & Automation](#25-tasks---scheduling--automation)  
 
+**Block 3 - Data Ingestion & Orchestration**
+
 3. [S3 Integration & Data Loading](#3-s3-integration--data-loading)  
 
 4. [Matillion Orchestration & ELT Design](#4-matillion-orchestration--elt-design)  
 
+---
+
+## 0. What to Expect
+
+This guide follows the natural flow of a modern data platform - from **how Snowflake works under the hood**, to **how we build and automate transformations**, and finally **how we ingest and orchestrate data end to end**.
+
+---
+
+# Block 1 - A bit of DevOps & Architecture  
+Understanding how Snowflake works under the hood - its architecture, performance layers, and optimization principles.
+
+---
+
+### 1. Snowflake Architecture & Performance Fundamentals  
+We begin with the *foundations*.  
+Before building any pipeline, we must understand how Snowflake actually runs queries - its three-layer architecture (storage, compute, and cloud services), how data is partitioned, cached, secured, and optimized. This section builds the mental model every engineer needs to reason about performance and cost.
+
+---
+
+
+### 2. Procedural SQL, Streams & Tasks  
+Once we know how Snowflake executes queries, we move into *building logic*.  
+Here we learn how to:
+- Write data transformation logic inside Snowflake (procedures and scripting)  
+- Apply incremental patterns with `MERGE`  
+- Detect changes automatically with **Streams (CDC)**  
+- Automate everything with **Tasks**  
+In other words, this section turns Snowflake from a query engine into a full **data-transformation and automation platform**.
+
+---
+
+### 3. S3 Integration & Data Loading  
+Until now, we’ve assumed data already existed inside Snowflake tables.  
+In reality, most data originates elsewhere - in raw CSVs, JSON API dumps, Parquet datasets, or partner S3 feeds.  
+This section shows **how to connect Snowflake to external storage (S3)** and **load data efficiently and securely** into internal tables - the ingestion bridge between the outside world and your analytical layer.
+
+---
+
+### 4. Matillion Orchestration & ELT Design  
+Finally, once ingestion and transformation logic are ready, we bring everything together under a governed orchestration layer.  
+Here we see how Matillion can visually model ELT flows, manage dependencies, and deploy jobs that tie ingestion, transformation, and scheduling into a cohesive, maintainable pipeline.
+
+---
+
+> Think of these four sections as consecutive layers of maturity:  
+> **Architecture → Transformation → Ingestion → Orchestration.**  
+> By the end, you’ll understand not only *how Snowflake works*, but *how to operate it as a complete data platform*.
 ---
 
 ## 1. Snowflake Architecture & Performance Fundamentals
@@ -166,7 +220,7 @@ When you submit a SQL query, the **Optimizer** (inside this layer) becomes the p
 
 ---
 
-#### ⚙️ Example: The Optimizer in Action
+#### Example: The Optimizer in Action
 
 ```sql
 SELECT c.country, SUM(o.amount)
@@ -642,6 +696,10 @@ Out of 5 partitions, only 2 are read - 60% of the work is saved.
 - [ ] I can explain **caching types** and how each one works.  
 - [ ] I can apply at least **three optimization techniques** (pruning, caching, views).  
 - [ ] I know how to **profile a query** to find performance bottlenecks.  
+
+---
+# Block 2 - Data Transformation & Automation  
+Building logic, handling incremental data, and automating updates natively inside Snowflake.
 
 ---
 
@@ -1642,8 +1700,7 @@ A **Task** is a Snowflake object that runs a SQL command or stored procedure:
 ### Example 1 - Basic Task for MERGE
 
 **Business Goal:**  
-Automatically update the `fact_sales` table every hour with new and changed records from `staging_sales`.  
-This ensures continuous data freshness without manual execution.
+Automatically update the `fact_sales` table every hour with new and changed records from `staging_sales`. This ensures continuous data freshness without manual execution.
 
 ```sql
     CREATE OR REPLACE TASK task_merge_sales
@@ -1663,6 +1720,7 @@ This ensures continuous data freshness without manual execution.
 - The warehouse `my_wh` resumes automatically for each run.  
 - The schedule `'1 HOUR'` executes hourly.  
 - Tasks can be paused/resumed:
+
 ```sql
    ALTER TASK task_merge_sales SUSPEND;
    ALTER TASK task_merge_sales RESUME;
@@ -1785,6 +1843,366 @@ Example query:
 > They automate SQL or procedural logic and enable **end-to-end pipelines**  
 > that run on schedule - entirely inside Snowflake, no external tools required.
 
+## 2.6 Why Streams Instead of Timestamps?
 
+### The Context
 
+Before Snowflake introduced **Streams**, most incremental data pipelines relied on **timestamp-based logic** to detect new or modified rows. The pattern looked something like this:
+
+```sql
+    SELECT *
+    FROM staging_sales
+    WHERE updated_at > (SELECT MAX(updated_at) FROM fact_sales);
+```
+
+This approach works - but it also carries several risks and long-term operational drawbacks. As data systems scale, those weaknesses become significant both technically and from a business perspective.
+
+---
+
+### Comparing the Two Approaches
+
+| Aspect | Timestamp-Based Incremental Load | Stream-Based CDC |
+|--------|----------------------------------|------------------|
+| **Change Detection** | Relies on application or ETL logic to update `updated_at` | Automatically tracked by Snowflake metadata |
+| **Accuracy** | Can miss updates if timestamps are delayed or inconsistent | Guaranteed to capture every DML event (INSERT, UPDATE, DELETE) |
+| **Deletes** | Not detected (rows simply disappear) | Tracked explicitly via `METADATA$ACTION = 'DELETE'` |
+| **Data Latency** | Often requires wide safety windows (reloading overlaps) | Processes only true deltas - real-time or micro-batch ready |
+| **Maintenance** | Requires managing last-run checkpoints and time zones | Fully managed - stream offset advances automatically |
+| **Compute Cost** | Re-reads entire time windows repeatedly | Scans only changed rows - cost scales with data volatility |
+| **Auditing & Replay** | Difficult to reconstruct exact history | Stream metadata provides deterministic replay window |
+| **Complexity** | Simple to start, brittle at scale | Slight setup overhead, but robust and self-maintaining |
+
+---
+
+### Technical Limitations of Timestamps
+
+1. **Human Dependency** - Assumes every system updates `updated_at` correctly, which is unreliable across multiple sources.  
+2. **Time Drift** - Late or out-of-order data can break “last timestamp” logic.  
+3. **Deletes Are Invisible** - A deleted row has no timestamp, so the warehouse never knows it’s gone.  
+4. **Inefficient Reprocessing** - Pipelines often reload overlapping windows (“last 24 hours”) to catch late data, wasting compute.
+
+---
+
+### Why a Tech Lead Chooses Streams
+
+From a **business and architectural** perspective, Streams provide several long-term advantages:
+
+| Benefit | Business Impact |
+|----------|----------------|
+| **Data integrity & trust** | Every change (insert, update, delete) is guaranteed to be captured - critical for audit and compliance. |
+| **Operational efficiency** | Less custom logic and maintenance; lower failure rates. |
+| **Compute savings** | Streams only process changed rows, drastically reducing warehouse time. |
+| **Real-time readiness** | Enables near–real-time CDC without external systems. |
+| **Simpler architecture** | Removes the need for checkpoint logic and timestamp comparisons. |
+| **Auditability** | Provides deterministic replay and historical traceability for debugging and governance. |
+
+**In short**:  
+> **Timestamps detect changes if everything goes right.  
+> Streams detect changes even when things go wrong.**
+
+---
+
+### Analogy
+
+> A timestamp-based pipeline is like asking employees what time they *think* they arrived.  
+> A Stream-based pipeline is like reading the building’s entry logs - every entry, exit, and edit is recorded precisely and automatically.
+
+---
+
+### When Timestamps Are Still Fine
+
+Not every project needs the full complexity or robustness of Streams. For smaller or append-only systems, **timestamp-based pipelines** can still be perfectly valid.
+
+| Scenario | Recommended Approach | Why |
+|-----------|----------------------|-----|
+| **Simple append-only data** (no updates/deletes) | Timestamps | Easy to implement; no change tracking needed. |
+| **Prototyping or proof-of-concept** | Timestamps | Quick setup; focus on testing business logic. |
+| **Third-party sources with reliable `updated_at`** | Timestamps | Consistent update logic makes it safe. |
+| **Large-scale, frequently updated datasets** | Streams | Avoids missing changes and reduces compute costs. |
+| **Compliance, auditing, or CDC integration** | Streams | Ensures full change tracking and replayability. |
+
+---
+
+### Key Takeaways
+
+- **Timestamps** are simple and quick - best for lightweight, append-only pipelines.  
+- **Streams** are robust and enterprise-ready - designed for systems with updates, deletes, or audit requirements.  
+- **Tech leads choose Streams** for long-term maintainability, cost savings, and data trustworthiness.  
+
+---
+
+**Summary:**  
+> Choosing Streams over timestamps isn’t about complexity - it’s about **reliability and scalability**.  
+> Streams turn incremental logic from a manual guessing game into a **deterministic, metadata-driven CDC system**,  
+> ensuring that every insert, update, and delete is captured - accurately, efficiently, and at scale.
+
+---
+
+# Block 3 - Data Ingestion & Orchestration  
+Connecting external data sources (like S3) and coordinating full EL->T flows with orchestration tools.
+
+---
+
+## 3.1 Stages in Snowflake - The Bridge Between Storage and Compute
+
+### Setting the Context: ETL vs ELT
+
+Before learning how Snowflake loads data, let’s recall a foundational concept in data engineering:  
+- the difference between **ETL** and **ELT**.  
+
+| Term | Stands For | Sequence | Where Transformation Happens | Example Tooling |
+|------|-------------|-----------|------------------------------|-----------------|
+| **E-T-L** | Extract → Transform → Load | Data is transformed *before* loading into the warehouse. | In external systems (e.g., `Spark`, `Python`, `Informatica`). | Traditional data warehouses |
+| **EL-T** | Extract & Load → Transform | Raw data is first *loaded as-is* into the warehouse, then transformed there. | Inside Snowflake using SQL or `dbt`. | Modern cloud data platforms |
+
+---
+
+### Why Modern Architectures Use EL->T
+
+In the past (ETL era), compute was expensive and warehouses were rigid. You transformed data **before** loading it to reduce storage costs.  
+
+Today, with Snowflake and other cloud-native systems:
+- **Compute is elastic** - you can scale up/down instantly.  
+- **Storage is cheap** - it’s efficient to store raw data.  
+- **SQL is powerful** - you can transform data directly inside the warehouse.  
+
+That’s why most Snowflake pipelines follow the **ELT pattern**:
+1. **Extract** → pull data from APIs, databases, or files into cloud storage (like S3).  
+2. **Load** → use **Snowflake Stages** and `COPY INTO` to bring it into Snowflake.  
+3. **Transform** → apply business logic with SQL, dbt, or stored procedures.
+
+> In short: ELT embraces Snowflake’s strengths - scalability, simplicity, and cost-efficiency.
+
+---
+
+### What Are Stages?
+
+A **Stage** is a *location where files live before being loaded into Snowflake*.  
+It acts as the **bridge** between external file storage (like S3) and Snowflake’s **internal tables**.
+
+When you run a `COPY INTO` command, Snowflake looks for files in a stage.
+
+| Stage Type | Where Data Physically Lives | Example Use |
+|-------------|-----------------------------|--------------|
+| **Internal Stage** | Inside Snowflake-managed cloud storage | Quick ad hoc file uploads |
+| **External Stage** | Outside Snowflake, e.g. AWS S3, Azure Blob, GCS | Production pipelines connected to data lakes |
+| **Named Stage** | A user-created object referencing internal or external storage | Reusable for automated data loads |
+
+---
+
+### Analogy
+
+> Think of a **Stage** as a **loading dock** for your data warehouse.  
+> Raw files (from S3, local uploads, or APIs) are temporarily parked here before being “moved” into structured tables.
+
+---
+
+### Internal vs External Stages
+
+| Type | Description | Example Definition | Typical Use |
+|------|--------------|--------------------|--------------|
+| **Internal Stage** | Files are stored directly within Snowflake’s environment. | `@%my_table` (table stage) or `@my_internal_stage` | Small uploads, manual data testing, secure internal pipelines. |
+| **External Stage** | Points to cloud storage like S3, Azure Blob, or GCS via credentials or IAM roles. | `CREATE STAGE s3_stage URL='s3://my-bucket/path/' CREDENTIALS=(AWS_KEY_ID=… AWS_SECRET_KEY=…);` | Large-scale production pipelines, automated ingestion. |
+
+---
+
+### Example - Creating an External Stage for S3
+
+```sql
+    CREATE OR REPLACE STAGE s3_stage
+    URL = 's3://company-data/raw/sales/'
+    CREDENTIALS = (AWS_KEY_ID = 'AKIA...' AWS_SECRET_KEY = 'XXXXXX')
+    FILE_FORMAT = (TYPE = 'CSV' FIELD_DELIMITER = ',' SKIP_HEADER = 1);
+```
+
+This definition:
+- Connects Snowflake to an **S3 bucket path**.  
+- Authenticates using **AWS credentials** (or IAM role).  
+- Defines a **file format** (so Snowflake knows how to read the files).
+
+---
+
+### Example - Loading Data from the Stage into a Table
+
+```sql
+    COPY INTO staging_sales
+    FROM @s3_stage
+    FILE_FORMAT = (TYPE = 'CSV' FIELD_DELIMITER = ',' SKIP_HEADER = 1)
+    ON_ERROR = 'CONTINUE';
+```
+
+- `COPY INTO` loads files from the stage into your table (`staging_sales`).  
+- The process runs **in parallel** across multiple files and Snowflake compute nodes.  
+- `ON_ERROR='CONTINUE'` ensures bad rows don’t block the load.
+
+---
+
+### What Happens Under the Hood
+
+When you run a `COPY INTO` from a stage:
+1. Snowflake’s **Cloud Services Layer** reads file metadata from S3.  
+2. The **Compute Layer** (warehouse) loads and parses data in parallel.  
+3. The **Storage Layer** saves it as compressed micro-partitions.  
+4. Successfully loaded files are marked in metadata to prevent reloading duplicates.
+
+> **Result:** high-speed, fault-tolerant, idempotent ingestion from S3 directly into Snowflake.
+
+---
+
+### Business Goal
+
+**Goal:**  
+Establish a secure and reliable connection between Snowflake and cloud storage (S3) so that data can be ingested automatically into the warehouse for downstream analysis.
+
+**Why It Matters:**  
+- Eliminates manual uploads or third-party connectors.  
+- Ensures data pipelines are **repeatable, auditable, and scalable**.  
+- Enables combining ingestion with **Tasks and Streams** for continuous ELT.
+
+Common Use Cases:
+- Daily ingestion of raw event logs from S3.  
+- Loading CSV exports from SaaS systems (Stripe, Shopify, Salesforce).  
+- Integrating third-party data vendors who deliver S3 files.
+
+---
+
+### Key Takeaways
+
+- **Stages** are the entry point for data loading into Snowflake.  
+- **External Stages** connect Snowflake directly to S3 or other cloud storage.  
+- **COPY INTO** moves data from the Stage into structured tables.  
+- Together, they form the “Extract → Load” part of modern **ELT pipelines**.  
+- You can then transform the data using SQL, dbt, or stored procedures inside Snowflake.
+
+---
+
+**Summary:**  
+> Stages are Snowflake’s built-in bridge between external storage and the warehouse.  
+> They enable seamless, secure, and scalable data loading - forming the foundation of every modern ELT pipeline.
+
+---
+
+## 3.2 File Formats, Schema Inference & Schema Drift
+
+### Why File Formats Matter
+
+When Snowflake loads files from S3 (CSV, JSON, Parquet), it must know **how to read them** -  
+where columns start and end, what separates fields, whether headers exist, and how to interpret data types.  
+
+That logic is defined by a **File Format**.
+
+| File Type | Structure | Schema Inference | Typical Use |
+|------------|------------|------------------|--------------|
+| **CSV** | Flat, delimited text | ❌ None (must define target columns manually) | SaaS exports, logs |
+| **JSON** | Nested, semi-structured | ✅ Partial (new keys appear dynamically in `VARIANT`) | APIs, event data |
+| **Parquet** | Binary, columnar | ✅ Full (schema stored in metadata) | Large analytical datasets |
+
+**Example - Define a CSV File Format**
+```sql
+    CREATE OR REPLACE FILE FORMAT csv_sales_format
+      TYPE = 'CSV' FIELD_DELIMITER = ',' SKIP_HEADER = 1;
+```
+Then load files with:
+
+    COPY INTO staging_sales
+    FROM @s3_stage
+    FILE_FORMAT = (FORMAT_NAME = 'csv_sales_format');
+
+---
+
+### Schema Inference - Letting Snowflake “Read” the File
+
+Some file formats can describe their structure automatically.
+
+| Format | Schema Inference Support | Notes |
+|---------|---------------------------|--------|
+| **CSV** | ❌ No | Table schema must match file exactly. |
+| **JSON** | ✅ Flexible | New keys automatically appear when stored as `VARIANT`. |
+| **Parquet** | ✅ Complete | Snowflake reads schema from Parquet metadata. |
+
+**Example - Preview Parquet File Structure**
+```sql
+    SELECT * FROM @s3_stage (FILE_FORMAT => 'PARQUET');
+```
+Snowflake infers column names and types directly from Parquet metadata - you can even create a table directly from that inferred schema.
+
+---
+
+### Schema Drift - A Real-World Problem
+
+**Schema drift** means the **structure of incoming files changes over time** - new columns appear, old ones disappear, or data types evolve.  
+
+This doesn’t mean Snowflake automatically adjusts - it means your *data changed*, and your ingestion pipeline must decide **how to respond**.
+
+| Type of Drift | Example | Impact |
+|----------------|----------|--------|
+| **New column** | New field `discount` added to CSV | `COPY INTO` fails - column mismatch |
+| **Removed column** | `region` column missing in next file | Column loads as NULL |
+| **Type change** | `amount` becomes `"100.00"` (string) | Causes cast errors or inconsistent data |
+
+---
+
+### Example - Schema Drift in a CSV Pipeline
+
+**Yesterday’s file (3 columns)**  
+| order_id | amount | region |
+|-----------|---------|--------|
+| 100 | 90 | ES |
+
+**Today’s file (4 columns)**  
+| order_id | amount | region | discount |
+|-----------|---------|--------|----------|
+| 101 | 120 | DE | 10 |
+
+**Result:**  
+A `COPY INTO` will fail because Snowflake expects 3 columns but receives 4.  
+This is **schema drift** - the data changed, but your ingestion logic didn’t.
+
+---
+
+### Why It Matters - A Data Governance Perspective
+
+In the real world, schema drift is not a “bug” - it’s a **signal** that your data contracts are changing. It’s both a **data quality** and a **data governance** issue.
+
+| Governance Lens | Why It Matters |
+|------------------|----------------|
+| **Data Quality** | Undetected drift can cause silent data loss or broken joins. |
+| **Traceability** | Without logging schema versions, it’s hard to audit what changed and when. |
+| **Accountability** | Teams need to know which upstream system introduced the change. |
+| **Risk Management** | In regulated environments, silent schema drift can lead to compliance violations (e.g., missing mandatory fields). |
+
+A robust pipeline doesn’t try to *prevent* schema drift - it **monitors and reacts** to it.
+
+---
+
+### How to Handle Schema Drift Responsibly
+
+| Approach | Description | When to Use |
+|-----------|--------------|-------------|
+| **Manual evolution** | Use `ALTER TABLE ADD COLUMN` when drift occurs | Stable CSV pipelines |
+| **Flexible ingestion** | Load data as `VARIANT` (for JSON/Parquet) | For frequent or unpredictable drift |
+| **Schema validation layer** | Compare new file structure to expected schema before loading | For critical or regulated pipelines |
+| **Metadata tracking** | Store schema versions and ingestion timestamps in a control table | For governance and debugging |
+| **Alerting** | Use Tasks or dbt tests to notify when new fields appear | For automated observability |
+
+**Example - Detecting Drift Before Load**
+```sql
+    SELECT METADATA$FILENAME, COUNT(*)
+    FROM @s3_stage (FILE_FORMAT => 'CSV')
+    GROUP BY 1;
+```
+You can inspect staged files or compare column counts before executing the `COPY INTO` command, allowing your pipeline to log or alert if a mismatch is detected.
+
+---
+
+### Key Takeaways
+
+- **File Formats** define how Snowflake interprets files.  
+- **Schema Inference** helps Snowflake discover structure (especially in Parquet).  
+- **Schema Drift** is not an error - it’s a *change in the data contract*.  
+- **Governance-aware pipelines** monitor drift, log schema versions, and alert when changes occur.  
+- The goal isn’t to stop drift - it’s to **detect and manage it before it breaks production**.
+
+> In modern data systems, schema drift is inevitable.  
+> Good data engineering doesn’t fear it - it plans for it.
 
