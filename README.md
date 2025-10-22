@@ -30,11 +30,11 @@ Welcome! This guide covers the **four essential pillars** of Snowflake mastery -
    - [2.4 Streams - Tracking Table Changes (Change Data Capture)](#24-streams---tracking-table-changes-change-data-capture)  
    - [2.5 Tasks - Scheduling & Automation](#25-tasks---scheduling--automation)  
 
-**Block 3 - Data Ingestion & Orchestration**
+**Block 3 - Data Ingestion & Orchestration & (some) Data Governance**
 
 3. [S3 Integration & Data Loading](#3-s3-integration--data-loading)  
 
-4. [Matillion Orchestration & ELT Design](#4-matillion-orchestration--elt-design)  
+4. [Orchestration & ELT Design](#4-orchestration--elt-design)  
 
 ---
 
@@ -1927,7 +1927,7 @@ Not every project needs the full complexity or robustness of Streams. For smalle
 
 ---
 
-# Block 3 - Data Ingestion & Orchestration  
+# Block 3 - Data Ingestion & Orchestration & (some) Data Governance 
 Connecting external data sources (like S3) and coordinating full EL->T flows with orchestration tools.
 
 ---
