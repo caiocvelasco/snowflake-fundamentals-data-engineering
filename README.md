@@ -38,7 +38,7 @@ Welcome! This guide covers the **four essential pillars** of Snowflake mastery -
 
 ---
 
-## 0. What to Expect
+## What to Expect
 
 This guide follows the natural flow of a modern data platform - from **how Snowflake works under the hood**, to **how we build and automate transformations**, and finally **how we ingest and orchestrate data end to end**.
 
