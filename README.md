@@ -5,7 +5,7 @@ Welcome! This guide covers the **four essential pillars** of Snowflake mastery -
 ---
 
 ## Table of Contents
-0. [What to Expect](#0-what-to-expect)  
+[What to Expect](#0-what-to-expect)  
 
 **Block 1 - A bit of DevOps & Architecture**
 
