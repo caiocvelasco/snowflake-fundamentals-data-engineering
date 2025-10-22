@@ -1,6 +1,6 @@
-# Snowflake Fundamentals
+# Introduction to Data Engineering - Via Snowflake Fundamentals
 
-Welcome! This guide covers the **four essential pillars** of Snowflake mastery - ideal for interview prep, onboarding, or building solid mental models.
+Welcome! This guide covers the **four essential pillars** of Snowflake mastery - ideal for interview prep, onboarding, or building solid mental models. At the same time, it's s soft-landing introduction to **modern data engineering** concepts.
 
 ---
 
