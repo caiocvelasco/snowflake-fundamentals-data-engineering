@@ -63,7 +63,7 @@ Until now, we’ve assumed data already existed inside Snowflake tables.
 In reality, most data originates elsewhere - in raw CSVs, JSON API dumps, Parquet datasets, or partner S3 feeds.  
 This section shows **how to connect Snowflake to external storage (S3)** and **load data efficiently and securely** into internal tables - the ingestion bridge between the outside world and your analytical layer.
 
-### 4. Matillion Orchestration & ELT Design  
+### 4. Orchestration & ELT Design  
 Finally, once ingestion and transformation logic are ready, we bring everything together under a governed orchestration layer.  
 Here we see how Matillion can visually model ELT flows, manage dependencies, and deploy jobs that tie ingestion, transformation, and scheduling into a cohesive, maintainable pipeline.
 
