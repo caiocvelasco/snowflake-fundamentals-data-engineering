@@ -42,19 +42,12 @@ Welcome! This guide covers the **four essential pillars** of Snowflake mastery -
 
 This guide follows the natural flow of a modern data platform - from **how Snowflake works under the hood**, to **how we build and automate transformations**, and finally **how we ingest and orchestrate data end to end**.
 
----
-
 # Block 1 - A bit of DevOps & Architecture  
 Understanding how Snowflake works under the hood - its architecture, performance layers, and optimization principles.
-
----
 
 ### 1. Snowflake Architecture & Performance Fundamentals  
 We begin with the *foundations*.  
 Before building any pipeline, we must understand how Snowflake actually runs queries - its three-layer architecture (storage, compute, and cloud services), how data is partitioned, cached, secured, and optimized. This section builds the mental model every engineer needs to reason about performance and cost.
-
----
-
 
 ### 2. Procedural SQL, Streams & Tasks  
 Once we know how Snowflake executes queries, we move into *building logic*.  
@@ -65,25 +58,21 @@ Here we learn how to:
 - Automate everything with **Tasks**  
 In other words, this section turns Snowflake from a query engine into a full **data-transformation and automation platform**.
 
----
-
 ### 3. S3 Integration & Data Loading  
 Until now, we’ve assumed data already existed inside Snowflake tables.  
 In reality, most data originates elsewhere - in raw CSVs, JSON API dumps, Parquet datasets, or partner S3 feeds.  
 This section shows **how to connect Snowflake to external storage (S3)** and **load data efficiently and securely** into internal tables - the ingestion bridge between the outside world and your analytical layer.
 
----
-
 ### 4. Matillion Orchestration & ELT Design  
 Finally, once ingestion and transformation logic are ready, we bring everything together under a governed orchestration layer.  
 Here we see how Matillion can visually model ELT flows, manage dependencies, and deploy jobs that tie ingestion, transformation, and scheduling into a cohesive, maintainable pipeline.
-
----
 
 > Think of these four sections as consecutive layers of maturity:  
 > **Architecture → Transformation → Ingestion → Orchestration.**  
 > By the end, you’ll understand not only *how Snowflake works*, but *how to operate it as a complete data platform*.
 ---
+
+Let's begin!
 
 ## 1. Snowflake Architecture & Performance Fundamentals
 
